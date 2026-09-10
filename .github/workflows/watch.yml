@@ -6,10 +6,14 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch:        # Actions sekmesinden elle çalıştırmak için
     inputs:
-      dry_run:
-        description: "Telegram'a göndermeden dene"
-        type: boolean
-        default: false
+      mode:
+        description: "Ne yapılsın?"
+        type: choice
+        default: "normal"
+        options:
+          - normal            # siteleri tara, yeni ilanları gönder
+          - test-notify       # sadece Telegram'a test mesajı at
+          - dry-run           # tara ama Telegram'a gönderme
 
 concurrency:
   group: ilan-takip
@@ -24,9 +28,9 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
@@ -45,7 +49,11 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python main.py ${{ inputs.dry_run && '--dry-run' || '' }}
+          case "${{ inputs.mode }}" in
+            test-notify) python main.py --test-notify ;;
+            dry-run)     python main.py --dry-run ;;
+            *)           python main.py ;;
+          esac
 
       - name: Görülen ilan kayıtlarını commit'le
         if: always()
