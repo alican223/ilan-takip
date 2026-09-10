@@ -132,6 +132,64 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
     return len(new_items), sent
 
 
+def run_test_notify(config: dict, notifier: notify.TelegramNotifier) -> int:
+    """Her kaynaktaki EN SON ilanı Telegram'a gönderir.
+
+    Zinciri baştan sona dener: indirme → ayrıştırma → biçimlendirme → gönderim.
+    "Görülen ilanlar" hafızasına dokunmaz, yani normal takibi bozmaz.
+    """
+    if not notifier.check_token():
+        log.error("TELEGRAM TESTİ BAŞARISIZ — token sorunu.")
+        return 1
+
+    sources = [s for s in config["sources"] if s.get("enabled", True)]
+    if not sources:
+        log.error("Etkin kaynak yok.")
+        return 1
+
+    problems = 0
+    for index, source in enumerate(sources):
+        name, label = source["name"], source.get("label", source["name"])
+        try:
+            body = fetch(
+                source["url"],
+                render=source.get("render", False),
+                timeout=source.get("timeout", 30),
+                headers=source.get("headers"),
+                wait_selector=source.get("wait_selector"),
+                warmup_url=source.get("warmup_url"),
+            )
+            items = parse.parse(body, source)
+            if not items:
+                log.error("[%s] sayfada hiç ilan bulunamadı — seçicileri kontrol et.",
+                          name)
+                problems += 1
+                continue
+
+            newest = items[0]   # sıralama "en yeni" olduğu için ilk kayıt
+            log.info("[%s] en son ilan: %s", name, (newest.get("title") or "?")[:60])
+
+            text = ("🧪 <b>TEST</b> — aşağıdaki, bu sitedeki en son ilan\n\n"
+                    + notify.format_item(newest, label))
+            if not notifier.send(text):
+                problems += 1
+            time.sleep(1)
+
+        except Exception as exc:  # noqa: BLE001
+            log.error("[%s] test başarısız: %s", name, exc)
+            problems += 1
+
+        if index < len(sources) - 1:
+            time.sleep(2)
+
+    if problems:
+        log.error("TELEGRAM TESTİ BAŞARISIZ — %d kaynakta sorun var.", problems)
+        return 1
+    log.info("TELEGRAM TESTİ BAŞARILI — %d mesaj gönderildi, Telegram'ı kontrol et.",
+             len(sources))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="İlan takip sistemi")
     ap.add_argument("--config", default="config.yaml", help="config dosyası")
@@ -141,6 +199,8 @@ def main() -> int:
                     help="sadece bu kaynağı çalıştır (birden fazla verilebilir)")
     ap.add_argument("--reset", action="store_true",
                     help="görülen ilan kayıtlarını sil ve çık")
+    ap.add_argument("--test-notify", action="store_true",
+                    help="Telegram ayarlarını dene: test mesajı gönder ve çık")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -159,6 +219,14 @@ def main() -> int:
         return 0
 
     config = load_config(ROOT / args.config)
+
+    if args.test_notify:
+        try:
+            tester = notify.TelegramNotifier(dry_run=args.dry_run)
+        except RuntimeError as exc:
+            log.error("%s", exc)
+            return 1
+        return run_test_notify(config, tester)
     defaults = config.get("defaults", {})
     sources = config["sources"]
     if args.source:
@@ -196,6 +264,13 @@ def main() -> int:
     # Hataları da bildir ki sistem sessizce ölmesin
     if failures and config.get("notify_errors", True) and not args.dry_run:
         notifier.send("⚠️ <b>Takip hatası</b>\n" + "\n".join(f"• {f}" for f in failures[:5]))
+
+    # Telegram gönderimi patladıysa çalıştırma YEŞİL görünmemeli —
+    # yoksa bildirim gitmediği hâlde her şey yolunda sanılır.
+    if notifier.failures:
+        log.error("%d bildirim gönderilemedi. `python main.py --test-notify` "
+                  "ile Telegram ayarlarını kontrol et.", notifier.failures)
+        return 1
 
     return 1 if failures else 0
 
