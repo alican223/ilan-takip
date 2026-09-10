@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -37,6 +38,33 @@ def load_config(path: Path) -> dict:
     return config
 
 
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_BLOCK_WORDS = ("captcha", "cloudflare", "access denied", "are you a robot",
+                "attention required", "erişim engellendi", "bot detection",
+                "just a moment", "payment required")
+
+
+def _diagnose_empty(name: str, body: str, source: dict) -> None:
+    """0 kayıt çıktığında sebebi log'dan anlaşılsın: engel mi, yanlış seçici mi?"""
+    title_match = _TITLE_RE.search(body)
+    title = " ".join(title_match.group(1).split())[:90] if title_match else "(başlık yok)"
+    log.warning("[%s] TEŞHİS → sayfa boyutu: %s karakter | <title>: %s",
+                name, f"{len(body):,}", title)
+
+    lowered = body[:6000].lower()
+    hit = next((w for w in _BLOCK_WORDS if w in lowered), None)
+    if hit or len(body) < 5000:
+        log.warning("[%s] Sayfa engellenmiş görünüyor (ipucu: %s). Site bu sunucunun "
+                    "IP'sini elemiş olabilir → render: true dene ya da kendi sunucuna taşı.",
+                    name, hit or "sayfa çok küçük")
+        return
+
+    item_sel = (source.get("selectors") or {}).get("item", "?")
+    log.warning("[%s] Sayfa normal indirilmiş ama '%s' seçicisi hiçbir şeyle eşleşmiyor "
+                "→ selectors.item yanlış. `python inspect_site.py \"%s\"` ile kontrol et.",
+                name, item_sel, source["url"])
+
+
 def run_source(source: dict, notifier: notify.TelegramNotifier,
                defaults: dict) -> tuple[int, int]:
     """Tek bir kaynağı tarar. (yeni_ilan_sayısı, gönderilen_mesaj) döner."""
@@ -55,8 +83,7 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
     items = parse.parse(body, source)
     log.info("[%s] sayfada %d kayıt bulundu", name, len(items))
     if not items:
-        log.warning("[%s] hiç kayıt çıkmadı — seçiciler değişmiş olabilir. "
-                    "`python inspect_site.py %s` ile kontrol et.", name, source["url"])
+        _diagnose_empty(name, body, source)
         return 0, 0
 
     passed, rejected = filters.apply(items, source.get("filters"))
