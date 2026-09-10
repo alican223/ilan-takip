@@ -9,8 +9,10 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-# "div.price::text", "a::attr(href)", "img::attr(data-src)" gibi ifadeleri ayrıştırır
-_SELECTOR_RE = re.compile(r"^(?P<css>.*?)(?:::(?P<mode>text|attr\((?P<attr>[^)]+)\)))?$")
+# "div.price::text", "a::attr(href)", "a::own_text" gibi ifadeleri ayrıştırır
+_SELECTOR_RE = re.compile(
+    r"^(?P<css>.*?)(?:::(?P<mode>own_text|text|attr\((?P<attr>[^)]+)\)))?$"
+)
 
 # 1.250.000 TL / £185,000 / 45.000₺ gibi metinlerden sayı çıkarmak için
 _NUM_RE = re.compile(r"\d[\d.,\s]*")
@@ -65,6 +67,16 @@ def _extract_one(element, selector: str, base_url: str) -> str | None:
         if value and attr in ("href", "src", "data-src") and base_url:
             value = urljoin(base_url, value)
         return value.strip() if value else None
+
+    if mode == "own_text":
+        # Sadece elemanın DOĞRUDAN metni; iç elemanların metni alınmaz.
+        # Örn. <a>Başlık <span>Konum</span></a> -> "Başlık"
+        own = " ".join(
+            chunk.strip()
+            for chunk in node.find_all(string=True, recursive=False)
+            if chunk.strip()
+        )
+        return own or None
 
     text = node.get_text(" ", strip=True)
     return text or None
