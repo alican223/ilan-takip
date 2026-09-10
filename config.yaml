@@ -74,36 +74,3 @@ sources:
     #   exclude: ["proje", "maketten"]
 
     notify_on_first_run: false
-
-  # ---------------------------------------------------------
-  # metroevler.com — Lefkoşa (bölge 14/144/27), satılık,
-  # konut tipi villa + müstakil, min 200m²
-  # ---------------------------------------------------------
-  - name: metroevler-lefkosa-satilik
-    label: "metroevler — Lefkoşa Villa/Müstakil 200m²+"
-    enabled: true
-    url: "https://www.metroevler.com/satilik-emlak/lefkosa?district%5B0%5D=14&district%5B1%5D=144&district%5B2%5D=27&s-r=S&property_type=1&property_subtype%5B0%5D=1&property_subtype%5B1%5D=4&min_m2=200&page=1&sort=li"
-    base_url: "https://www.metroevler.com"
-    type: html
-    render: false              # sunucu tarafında üretiliyor
-
-    # Bu site GitHub Actions IP'sinden gelen çıplak isteği 403 ile reddediyor.
-    # Önce ana sayfayı ziyaret edip çerez alıyoruz, sonra arama sayfasına
-    # "site içinden geliyormuş" gibi giriyoruz.
-    warmup_url: "https://www.metroevler.com/"
-
-    selectors:
-      item: "div.listing-item"
-      title: "div.listing-title h4 a::text"
-      price: "span.listing-price-details::text"          # £ cinsinden
-      link: "a.listing-img-container::attr(href)"         # /ilan-detay/564873 — dedup anahtarı
-      location: "a.listing-address::text"
-      date: "ul.listing-details li.pull-right span::text"
-      tip: "ul.listing-details li:nth-child(1) span::text"
-      alan: "ul.listing-details li:nth-child(2) span::text_tight"   # 315m<sup>2</sup> -> "315m2"
-      oda: "ul.listing-details li:nth-child(3) span::text"
-
-    # filters:
-    #   max_price: 500000     # sterlin
-
-    notify_on_first_run: false
