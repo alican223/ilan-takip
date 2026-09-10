@@ -59,7 +59,17 @@ class TelegramNotifier:
 
 
 def _esc(value) -> str:
-    return html.escape(str(value)) if value is not None else ""
+    """Metin içeriği için: Telegram HTML'inin istediği yalnızca & < > kaçışı.
+
+    quote=True kullanılırsa kesme işareti &#x27; olur ve Telegram bunu
+    düz metin olarak gösterebilir ("Gönyeli&#x27;de" gibi).
+    """
+    return html.escape(str(value), quote=False) if value is not None else ""
+
+
+def _esc_attr(value) -> str:
+    """href gibi öznitelik değerleri için: tırnak da kaçırılmalı."""
+    return html.escape(str(value), quote=True) if value is not None else ""
 
 
 def format_item(item: dict, source_label: str) -> str:
@@ -68,7 +78,7 @@ def format_item(item: dict, source_label: str) -> str:
     link = item.get("link")
 
     lines = [f"🔔 <b>{source_label}</b>"]
-    lines.append(f"<b>{title}</b>" if not link else f'<b><a href="{_esc(link)}">{title}</a></b>')
+    lines.append(f"<b>{title}</b>" if not link else f'<b><a href="{_esc_attr(link)}">{title}</a></b>')
 
     if item.get("price_text"):
         lines.append(f"💰 {_esc(item['price_text'])}")
@@ -99,7 +109,7 @@ def format_digest(items: list[dict], source_label: str) -> str:
         link = item.get("link")
         price = f" — {_esc(item['price_text'])}" if item.get("price_text") else ""
         lines.append(
-            f'• <a href="{_esc(link)}">{title}</a>{price}' if link
+            f'• <a href="{_esc_attr(link)}">{title}</a>{price}' if link
             else f"• {title}{price}"
         )
     return "\n".join(lines)
