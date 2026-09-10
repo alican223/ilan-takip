@@ -17,7 +17,7 @@ sources:
   # sort=li  → en yeni ilan başta
   # ---------------------------------------------------------
   - name: 101evler-lefkosa-satilik
-    label: "101evler"
+    label: "101evler — Lefkoşa Satılık 200m²+"
     enabled: true
     url: "https://www.101evler.com/kibris/satilik-konut/lefkosa?min_m2=200&property_subtype=1,4&district=14,144,27&page=1&sort=li"
     base_url: "https://www.101evler.com"
@@ -53,7 +53,7 @@ sources:
   #      subtypes/minbedrooms/minarea filtreleri yok sayılır.
   # ---------------------------------------------------------
   - name: hangiev-lefkosa-satilik
-    label: "Hangiev"
+    label: "hangiev — Lefkoşa Villa/Müstakil 200m²+"
     enabled: true
     url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200"
     base_url: "https://www.hangiev.com"
@@ -80,12 +80,17 @@ sources:
   # konut tipi villa + müstakil, min 200m²
   # ---------------------------------------------------------
   - name: metroevler-lefkosa-satilik
-    label: "Metroevler"
+    label: "metroevler — Lefkoşa Villa/Müstakil 200m²+"
     enabled: true
     url: "https://www.metroevler.com/satilik-emlak/lefkosa?district%5B0%5D=14&district%5B1%5D=144&district%5B2%5D=27&s-r=S&property_type=1&property_subtype%5B0%5D=1&property_subtype%5B1%5D=4&min_m2=200&page=1&sort=li"
     base_url: "https://www.metroevler.com"
     type: html
     render: false              # sunucu tarafında üretiliyor
+
+    # Bu site GitHub Actions IP'sinden gelen çıplak isteği 403 ile reddediyor.
+    # Önce ana sayfayı ziyaret edip çerez alıyoruz, sonra arama sayfasına
+    # "site içinden geliyormuş" gibi giriyoruz.
+    warmup_url: "https://www.metroevler.com/"
 
     selectors:
       item: "div.listing-item"
