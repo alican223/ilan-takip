@@ -78,6 +78,7 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
         timeout=source.get("timeout", defaults.get("timeout", 30)),
         headers=source.get("headers"),
         wait_selector=source.get("wait_selector"),
+        warmup_url=source.get("warmup_url"),
     )
 
     items = parse.parse(body, source)
