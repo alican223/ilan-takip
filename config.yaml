@@ -45,3 +45,32 @@ sources:
     #   exclude: ["proje", "maketten"]
 
     notify_on_first_run: false   # ilk tarama mevcut 30 ilanı sessizce kaydeder
+
+  # ---------------------------------------------------------
+  # hangiev.com — Lefkoşa (Gönyeli/Kanlıköy/Yenikent),
+  # villa + müstakil ev, min 3 yatak odası, min 200m²
+  # NOT: URL'de ikinci "?" yerine "&" olmalı, yoksa
+  #      subtypes/minbedrooms/minarea filtreleri yok sayılır.
+  # ---------------------------------------------------------
+  - name: hangiev-lefkosa-satilik
+    label: "hangiev — Lefkoşa Villa/Müstakil 200m²+"
+    enabled: true
+    url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200"
+    base_url: "https://www.hangiev.com"
+    type: html
+    render: false              # sunucu tarafında üretiliyor
+
+    selectors:
+      item: "div.list-item"
+      title: "a.stretched-link::own_text"        # sadece <a>'nın kendi metni (konum hariç)
+      price: "p.price::text"                     # £ cinsinden
+      link: "a.stretched-link::attr(href)"
+      location: "a.stretched-link span::text"
+      id: "::attr(data-propertyid)"              # kartın kendi özniteliği — dedup anahtarı
+      emlakci: "div.broker-name p::text"
+
+    # filters:
+    #   max_price: 500000     # sterlin
+    #   exclude: ["proje", "maketten"]
+
+    notify_on_first_run: false
