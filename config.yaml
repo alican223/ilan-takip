@@ -17,7 +17,7 @@ sources:
   # sort=li  → en yeni ilan başta
   # ---------------------------------------------------------
   - name: 101evler-lefkosa-satilik
-    label: "101evler"
+    label: "101evler — Lefkoşa Satılık 200m²+"
     enabled: true
     url: "https://www.101evler.com/kibris/satilik-konut/lefkosa?min_m2=200&property_subtype=1,4&district=14,144,27&page=1&sort=li"
     base_url: "https://www.101evler.com"
