@@ -19,7 +19,10 @@ DEFAULT_HEADERS = {
     "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
                "image/avif,image/webp,*/*;q=0.8"),
     "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
+    # DİKKAT: Accept-Encoding'i ELLE AYARLAMA. requests yalnızca açabildiği
+    # yöntemleri ister (gzip, deflate). Buraya "br" eklenirse site brotli
+    # gönderir, requests açamaz ve elimize çözülmemiş ikili veri geçer —
+    # sayfa sağlam iner ama hiçbir seçici tutmaz.
     "Upgrade-Insecure-Requests": "1",
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
