@@ -1,66 +1,47 @@
 # =============================================================
 #  İlan takip yapılandırması
-#  Her "source" bir arama sayfası = bir takip.
-#  Seçicileri bilmiyorsan:  python inspect_site.py "<URL>"
+#  Yeni site eklerken:  python inspect_site.py "<URL>"
 # =============================================================
 
 defaults:
-  timeout: 30                 # saniye
-  delay_between_sources: 3    # kaynaklar arası bekleme (siteyi yormamak için)
+  timeout: 30
+  delay_between_sources: 3
   digest_threshold: 6         # bu kadar veya daha fazla yeni ilan varsa tek özet mesaj
 
-notify_errors: true           # kaynak hata verirse Telegram'a uyarı at
+notify_errors: true
 
 sources:
   # ---------------------------------------------------------
-  # ÖRNEK 1 — Klasik HTML liste sayfası
+  # 101evler — Lefkoşa satılık konut, 200m²+, seçili bölgeler
+  # Filtreler URL'nin içinde (min_m2, property_subtype, district)
+  # sort=li  → en yeni ilan başta
   # ---------------------------------------------------------
-  - name: 101 evler            # dosya adı olarak da kullanılır, boşluksuz
-    label: "101 Evler"   # Telegram mesajında görünen başlık
-    enabled: true               # gerçek ayarını yapınca true yap
+  - name: 101evler-lefkosa-satilik
+    label: "101evler"
+    enabled: true
     url: "https://www.101evler.com/kibris/satilik-konut/lefkosa?min_m2=200&property_subtype=1,4&district=14,144,27&page=1&sort=li"
+    base_url: "https://www.101evler.com"
     type: html
-    render: false                # sayfa JS ile yükleniyorsa true (playwright gerekir)
-    # wait_selector: ".listing-card"   # render:true iken beklenecek eleman
+    render: false              # sayfa sunucu tarafında üretiliyor, JS gerekmiyor
 
     selectors:
-      item: ".listing-card"                    # her ilanı saran kapsayıcı
-      title: "h3.listing-title::text"
-      price: ".listing-price::text"
-      link: "a.listing-link::attr(href)"
-      location: ".listing-location::text"
-      date: ".listing-date::text"
-      # istediğin kadar ek alan ekleyebilirsin:
-      # rooms: ".attr-rooms::text"
+      item: "div.ilanitembasic"
+      title: "h4.text-block-129::text"
+      price: "div.basicprice::text"                      # £ cinsinden
+      link: "a.hover-black::attr(href)"
+      location: "div.text-block-131::text"
+      date: "div.text-block-132::text"
+      id: "div.text-block-132 ~ div.text-block-132::text"  # #566700 — dedup anahtarı
+      alan: "div.text-block-130::text"
+      oda: "div.text-block-130 ~ div.text-block-130::text"
+      emlakci: "div.div-block-334::text"
 
-    filters:
-      max_price: 45000           # price alanından çıkarılan sayıya göre
-      # min_price: 10000
-      include: ["girne", "alsancak", "lapta"]   # en az biri geçmeli
-      # require_all: ["esyali"]                 # hepsi geçmeli
-      exclude: ["stüdyo", "paylaşımlı", "devren"]
-      # regex: "2\\+1|3\\+1"
+    # URL zaten filtreli olduğu için burada ek kural şart değil.
+    # İhtiyaç olursa aç — fiyatlar STERLİN (£) cinsindendir:
+    # filters:
+    #   max_price: 500000
+    #   min_price: 150000
+    #   include: ["gönyeli", "yenikent"]
+    #   exclude: ["proje", "maketten"]
 
-    notify_on_first_run: false   # ilk taramada mevcut ilanlar sessizce kaydedilir
-
-  # ---------------------------------------------------------
-  # ÖRNEK 2 — Sitenin kendi JSON API'si (varsa en sağlam yöntem)
-  # DevTools > Network > Fetch/XHR sekmesinden bulunur
-  # ---------------------------------------------------------
-  - name: ornek-arac-api
-    label: "2. El Araç < 500.000"
-    enabled: false
-    url: "https://ornek-site.com/api/v2/listings?category=car&sort=newest"
-    type: json
-    base_url: "https://ornek-site.com"
-    items_path: "data.results"     # JSON içindeki liste yolu
-    fields:
-      id: "id"
-      title: "title"
-      price: "price.amount"
-      link: "detailUrl"
-      location: "location.city"
-      date: "publishedAt"
-    filters:
-      max_price: 500000
-      exclude: ["hasarlı", "pert"]
+    notify_on_first_run: false   # ilk tarama mevcut 30 ilanı sessizce kaydeder
