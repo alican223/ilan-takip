@@ -51,6 +51,15 @@ def _diagnose_empty(name: str, body: str, source: dict) -> None:
     log.warning("[%s] TEŞHİS → sayfa boyutu: %s karakter | <title>: %s",
                 name, f"{len(body):,}", title)
 
+    # HTML'de en az %0.5 oranında '<' bulunur. Çok altındaysa gövde
+    # çözülmemiş (brotli gibi) ya da ikili veridir.
+    sample = body[:20000]
+    if sample and sample.count("<") < len(sample) * 0.005:
+        log.warning("[%s] Gövde HTML'e benzemiyor — muhtemelen çözülemeyen bir "
+                    "sıkıştırma (brotli) geldi. Accept-Encoding başlığını elle "
+                    "ayarlama, requests'e bırak.", name)
+        return
+
     lowered = body[:6000].lower()
     hit = next((w for w in _BLOCK_WORDS if w in lowered), None)
     if hit or len(body) < 5000:
