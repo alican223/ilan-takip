@@ -1,0 +1,63 @@
+name: İlan Takibi
+
+on:
+  schedule:
+    # Her 30 dakikada bir (UTC). GitHub yoğunlukta birkaç dakika geciktirebilir.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:        # Actions sekmesinden elle çalıştırmak için
+    inputs:
+      dry_run:
+        description: "Telegram'a göndermeden dene"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ilan-takip
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # state/ dosyalarını geri commit'lemek için
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements.txt
+
+      # JS ile yüklenen site takip ediyorsan (config'de render: true) bu adımı aç:
+      # - name: Playwright kur
+      #   run: |
+      #     pip install playwright
+      #     playwright install --with-deps chromium
+
+      - name: Taramayı çalıştır
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python main.py ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Görülen ilan kayıtlarını commit'le
+        if: always()
+        run: |
+          git config user.name  "ilan-takip-bot"
+          git config user.email "actions@github.com"
+          git add state/
+          if git diff --staged --quiet; then
+            echo "Değişiklik yok."
+          else
+            git commit -m "chore: ilan durumu güncellendi [skip ci]"
+            # Eşzamanlı çalışmada çakışmayı önle
+            git pull --rebase --autostash origin ${{ github.ref_name }} || true
+            git push
+          fi
