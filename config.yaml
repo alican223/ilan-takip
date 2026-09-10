@@ -15,10 +15,10 @@ sources:
   # ---------------------------------------------------------
   # ÖRNEK 1 — Klasik HTML liste sayfası
   # ---------------------------------------------------------
-  - name: ornek-emlak            # dosya adı olarak da kullanılır, boşluksuz
-    label: "Girne 2+1 Kiralık"   # Telegram mesajında görünen başlık
-    enabled: false               # gerçek ayarını yapınca true yap
-    url: "https://ornek-site.com/kiralik?bolge=girne&oda=2+1&sirala=yeni"
+  - name: 101 evler            # dosya adı olarak da kullanılır, boşluksuz
+    label: "101 Evler"   # Telegram mesajında görünen başlık
+    enabled: true               # gerçek ayarını yapınca true yap
+    url: "https://www.101evler.com/kibris/satilik-konut/lefkosa?min_m2=200&property_subtype=1,4&district=14,144,27&page=1&sort=li"
     type: html
     render: false                # sayfa JS ile yükleniyorsa true (playwright gerekir)
     # wait_selector: ".listing-card"   # render:true iken beklenecek eleman
