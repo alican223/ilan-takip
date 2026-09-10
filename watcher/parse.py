@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 # "div.price::text", "a::attr(href)", "a::own_text" gibi ifadeleri ayrıştırır
 _SELECTOR_RE = re.compile(
-    r"^(?P<css>.*?)(?:::(?P<mode>own_text|text|attr\((?P<attr>[^)]+)\)))?$"
+    r"^(?P<css>.*?)(?:::(?P<mode>own_text|text_tight|text|attr\((?P<attr>[^)]+)\)))?$"
 )
 
 # 1.250.000 TL / £185,000 / 45.000₺ gibi metinlerden sayı çıkarmak için
@@ -67,6 +67,12 @@ def _extract_one(element, selector: str, base_url: str) -> str | None:
         if value and attr in ("href", "src", "data-src") and base_url:
             value = urljoin(base_url, value)
         return value.strip() if value else None
+
+    if mode == "text_tight":
+        # İç elemanlar arasına boşluk koymadan birleştirir.
+        # Örn. <span>315m<sup>2</sup></span> -> "315m2" ("315m 2" değil)
+        tight = "".join(node.stripped_strings)
+        return tight or None
 
     if mode == "own_text":
         # Sadece elemanın DOĞRUDAN metni; iç elemanların metni alınmaz.
