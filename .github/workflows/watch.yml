@@ -2,8 +2,9 @@ name: İlan Takibi
 
 on:
   schedule:
-    # Her 30 dakikada bir (UTC). GitHub yoğunlukta birkaç dakika geciktirebilir.
-    - cron: "*/30 * * * *"
+    # 4 saatte bir (UTC): 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+    # GitHub yoğunlukta birkaç dakika geciktirebilir.
+    - cron: "0 */4 * * *"
   workflow_dispatch:        # Actions sekmesinden elle çalıştırmak için
     inputs:
       mode:
@@ -12,8 +13,9 @@ on:
         default: "normal"
         options:
           - normal            # siteleri tara, yeni ilanları gönder
-          - test-notify       # sadece Telegram'a test mesajı at
+          - test-notify       # her siteden en son ilanı test olarak gönder
           - dry-run           # tara ama Telegram'a gönderme
+          - reset             # "görülen ilanlar" hafızasını sıfırla
 
 concurrency:
   group: ilan-takip
@@ -52,6 +54,7 @@ jobs:
           case "${{ inputs.mode }}" in
             test-notify) python main.py --test-notify ;;
             dry-run)     python main.py --dry-run ;;
+            reset)       python main.py --reset ;;
             *)           python main.py ;;
           esac
 
