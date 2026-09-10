@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""
+İlan takip sistemi — config.yaml'daki kaynakları tarar, filtreye uyan
+YENİ ilanları Telegram'a gönderir.
+
+Kullanım:
+    python main.py                    # normal çalıştırma
+    python main.py --dry-run          # Telegram'a göndermeden ekrana yaz
+    python main.py --source emlak-101 # tek kaynağı çalıştır
+    python main.py --reset            # görülen ilan kayıtlarını sıfırla
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import random
+import sys
+import time
+from pathlib import Path
+
+import yaml
+
+from watcher import filters, notify, parse
+from watcher.fetch import FetchError, fetch
+from watcher.store import STATE_DIR, SeenStore
+
+ROOT = Path(__file__).resolve().parent
+log = logging.getLogger("watcher")
+
+
+def load_config(path: Path) -> dict:
+    with path.open(encoding="utf-8") as fh:
+        config = yaml.safe_load(fh) or {}
+    if not config.get("sources"):
+        raise SystemExit(f"{path} içinde 'sources' listesi yok.")
+    return config
+
+
+def run_source(source: dict, notifier: notify.TelegramNotifier,
+               defaults: dict) -> tuple[int, int]:
+    """Tek bir kaynağı tarar. (yeni_ilan_sayısı, gönderilen_mesaj) döner."""
+    name = source["name"]
+    label = source.get("label", name)
+    store = SeenStore(name)
+
+    body = fetch(
+        source["url"],
+        render=source.get("render", False),
+        timeout=source.get("timeout", defaults.get("timeout", 30)),
+        headers=source.get("headers"),
+        wait_selector=source.get("wait_selector"),
+    )
+
+    items = parse.parse(body, source)
+    log.info("[%s] sayfada %d kayıt bulundu", name, len(items))
+    if not items:
+        log.warning("[%s] hiç kayıt çıkmadı — seçiciler değişmiş olabilir. "
+                    "`python inspect_site.py %s` ile kontrol et.", name, source["url"])
+        return 0, 0
+
+    passed, rejected = filters.apply(items, source.get("filters"))
+    log.info("[%s] filtreden geçen: %d, elenen: %d", name, len(passed), len(rejected))
+    for item, reason in rejected[:3]:
+        log.debug("[%s] elendi: %s (%s)", name, item.get("title"), reason)
+
+    new_items = [item for item in passed if store.is_new(item["_id"])]
+
+    # İlk çalıştırmada mevcut ilanlar "yeni" sayılmaz — 200 mesajlık sel olmasın
+    first_run_silent = store.is_first_run and not source.get("notify_on_first_run", False)
+    if first_run_silent and new_items:
+        log.info("[%s] ilk çalıştırma: %d ilan sessizce kaydedildi", name, len(new_items))
+        for item in new_items:
+            store.mark(item["_id"])
+        store.save()
+        return 0, 0
+
+    sent = 0
+    if new_items:
+        digest_threshold = source.get("digest_threshold",
+                                      defaults.get("digest_threshold", 6))
+        if len(new_items) >= digest_threshold:
+            if notifier.send(notify.format_digest(new_items, label)):
+                sent += 1
+                for item in new_items:
+                    store.mark(item["_id"])
+        else:
+            for item in new_items:
+                if notifier.send(notify.format_item(item, label)):
+                    sent += 1
+                    store.mark(item["_id"])
+                    time.sleep(1)  # Telegram'ı yormayalım
+
+    store.save()
+    return len(new_items), sent
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="İlan takip sistemi")
+    ap.add_argument("--config", default="config.yaml", help="config dosyası")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="Telegram'a göndermeden ekrana yaz")
+    ap.add_argument("--source", action="append",
+                    help="sadece bu kaynağı çalıştır (birden fazla verilebilir)")
+    ap.add_argument("--reset", action="store_true",
+                    help="görülen ilan kayıtlarını sil ve çık")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    args = ap.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    if args.reset:
+        removed = 0
+        for f in STATE_DIR.glob("*.json"):
+            f.unlink()
+            removed += 1
+        log.info("%d durum dosyası silindi.", removed)
+        return 0
+
+    config = load_config(ROOT / args.config)
+    defaults = config.get("defaults", {})
+    sources = config["sources"]
+    if args.source:
+        wanted = set(args.source)
+        sources = [s for s in sources if s["name"] in wanted]
+        if not sources:
+            log.error("Eşleşen kaynak yok: %s", ", ".join(wanted))
+            return 1
+
+    notifier = notify.TelegramNotifier(dry_run=args.dry_run)
+
+    total_new = total_sent = 0
+    failures: list[str] = []
+
+    for index, source in enumerate(sources):
+        if not source.get("enabled", True):
+            log.info("[%s] devre dışı, atlanıyor", source["name"])
+            continue
+        try:
+            new_count, sent = run_source(source, notifier, defaults)
+            total_new += new_count
+            total_sent += sent
+        except (FetchError, ValueError) as exc:
+            log.error("[%s] HATA: %s", source["name"], exc)
+            failures.append(f"{source['name']}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[%s] beklenmeyen hata", source["name"])
+            failures.append(f"{source['name']}: {exc}")
+
+        if index < len(sources) - 1:
+            time.sleep(defaults.get("delay_between_sources", 3) + random.uniform(0, 2))
+
+    log.info("Bitti — %d yeni ilan, %d mesaj gönderildi.", total_new, total_sent)
+
+    # Hataları da bildir ki sistem sessizce ölmesin
+    if failures and config.get("notify_errors", True) and not args.dry_run:
+        notifier.send("⚠️ <b>Takip hatası</b>\n" + "\n".join(f"• {f}" for f in failures[:5]))
+
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

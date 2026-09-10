@@ -1,0 +1,66 @@
+# =============================================================
+#  İlan takip yapılandırması
+#  Her "source" bir arama sayfası = bir takip.
+#  Seçicileri bilmiyorsan:  python inspect_site.py "<URL>"
+# =============================================================
+
+defaults:
+  timeout: 30                 # saniye
+  delay_between_sources: 3    # kaynaklar arası bekleme (siteyi yormamak için)
+  digest_threshold: 6         # bu kadar veya daha fazla yeni ilan varsa tek özet mesaj
+
+notify_errors: true           # kaynak hata verirse Telegram'a uyarı at
+
+sources:
+  # ---------------------------------------------------------
+  # ÖRNEK 1 — Klasik HTML liste sayfası
+  # ---------------------------------------------------------
+  - name: ornek-emlak            # dosya adı olarak da kullanılır, boşluksuz
+    label: "Girne 2+1 Kiralık"   # Telegram mesajında görünen başlık
+    enabled: false               # gerçek ayarını yapınca true yap
+    url: "https://ornek-site.com/kiralik?bolge=girne&oda=2+1&sirala=yeni"
+    type: html
+    render: false                # sayfa JS ile yükleniyorsa true (playwright gerekir)
+    # wait_selector: ".listing-card"   # render:true iken beklenecek eleman
+
+    selectors:
+      item: ".listing-card"                    # her ilanı saran kapsayıcı
+      title: "h3.listing-title::text"
+      price: ".listing-price::text"
+      link: "a.listing-link::attr(href)"
+      location: ".listing-location::text"
+      date: ".listing-date::text"
+      # istediğin kadar ek alan ekleyebilirsin:
+      # rooms: ".attr-rooms::text"
+
+    filters:
+      max_price: 45000           # price alanından çıkarılan sayıya göre
+      # min_price: 10000
+      include: ["girne", "alsancak", "lapta"]   # en az biri geçmeli
+      # require_all: ["esyali"]                 # hepsi geçmeli
+      exclude: ["stüdyo", "paylaşımlı", "devren"]
+      # regex: "2\\+1|3\\+1"
+
+    notify_on_first_run: false   # ilk taramada mevcut ilanlar sessizce kaydedilir
+
+  # ---------------------------------------------------------
+  # ÖRNEK 2 — Sitenin kendi JSON API'si (varsa en sağlam yöntem)
+  # DevTools > Network > Fetch/XHR sekmesinden bulunur
+  # ---------------------------------------------------------
+  - name: ornek-arac-api
+    label: "2. El Araç < 500.000"
+    enabled: false
+    url: "https://ornek-site.com/api/v2/listings?category=car&sort=newest"
+    type: json
+    base_url: "https://ornek-site.com"
+    items_path: "data.results"     # JSON içindeki liste yolu
+    fields:
+      id: "id"
+      title: "title"
+      price: "price.amount"
+      link: "detailUrl"
+      location: "location.city"
+      date: "publishedAt"
+    filters:
+      max_price: 500000
+      exclude: ["hasarlı", "pert"]
