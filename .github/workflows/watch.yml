@@ -15,6 +15,7 @@ on:
           - normal            # siteleri tara, yeni ilanları gönder
           - test-notify       # her siteden en son ilanı test olarak gönder
           - dry-run           # tara ama Telegram'a gönderme
+          - doctor            # kaynak sağlığı raporu (neden bildirim gelmiyor?)
           - reset             # "görülen ilanlar" hafızasını sıfırla
 
 concurrency:
@@ -54,6 +55,7 @@ jobs:
           case "${{ inputs.mode }}" in
             test-notify) python main.py --test-notify ;;
             dry-run)     python main.py --dry-run ;;
+            doctor)      python main.py --doctor ;;
             reset)       python main.py --reset ;;
             *)           python main.py ;;
           esac
