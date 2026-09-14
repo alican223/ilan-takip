@@ -41,3 +41,11 @@ class SeenStore:
 
     def __len__(self) -> int:
         return len(self._data)
+
+    def last_new_at(self) -> float | None:
+        """En son ne zaman YENİ bir ilan kaydedildi (unix zaman)."""
+        return max(self._data.values()) if self._data else None
+
+    def days_since_last_new(self) -> float | None:
+        last = self.last_new_at()
+        return None if last is None else (time.time() - last) / 86400
