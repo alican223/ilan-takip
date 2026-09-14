@@ -129,7 +129,93 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
                     time.sleep(1)  # Telegram'ı yormayalım
 
     store.save()
+
+    # Uzun süredir yeni ilan gelmiyorsa bu bir arıza olabilir — sessizce
+    # geçme. En sık sebebi arama adresinin "en yeni" sıralı olmaması.
+    if not new_items:
+        gecen = store.days_since_last_new()
+        limit = source.get("stale_after_days", defaults.get("stale_after_days", 7))
+        if gecen is not None and gecen > limit:
+            log.warning("[%s] %.0f gündür yeni ilan yok. Arama adresi 'en yeni' "
+                        "sıralı mı? `python main.py --doctor` ile kontrol et.",
+                        name, gecen)
+
     return len(new_items), sent
+
+
+def run_doctor(config: dict, defaults: dict) -> int:
+    """Her kaynağın sağlığını raporlar: sessizlik hata mı, yoksa gerçekten
+    yeni ilan mı yok — ayırt etmeye yarar. Hiçbir şeyi değiştirmez."""
+    stale_days = config.get("stale_after_days", 7)
+    sources = [s for s in config["sources"] if s.get("enabled", True)]
+    sorunlu = 0
+
+    print()
+    for source in sources:
+        name, label = source["name"], source.get("label", source["name"])
+        store = SeenStore(name)
+        print("=" * 68)
+        print(f"  {label}   [{name}]")
+        print("=" * 68)
+
+        gecen = store.days_since_last_new()
+        print(f"  Hafıza      : {len(store)} ilan kayıtlı", end="")
+        print(f" | son yeni ilan {gecen:.1f} gün önce" if gecen is not None
+              else " | henüz hiç kayıt yok")
+
+        try:
+            body = fetch(
+                source["url"],
+                render=source.get("render", False),
+                timeout=source.get("timeout", defaults.get("timeout", 30)),
+                headers=source.get("headers"),
+                wait_selector=source.get("wait_selector"),
+                warmup_url=source.get("warmup_url"),
+            )
+            items = parse.parse(body, source)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ✗ SAYFA İNDİRİLEMEDİ: {exc}\n")
+            sorunlu += 1
+            continue
+
+        if not items:
+            print("  ✗ Sayfada hiç ilan bulunamadı.")
+            _diagnose_empty(name, body, source)
+            print()
+            sorunlu += 1
+            continue
+
+        passed, _ = filters.apply(items, source.get("filters"))
+        yeni = [i for i in passed if store.is_new(i["_id"])]
+        gorulmus = len(passed) - len(yeni)
+
+        print(f"  Canlı sayfa : {len(items)} ilan | filtreden geçen {len(passed)}"
+              f" | bunların {gorulmus}'i zaten görülmüş, {len(yeni)}'i yeni")
+        print(f"  En üstteki  : {(passed[0].get('title') or '?')[:58]}"
+              if passed else "  En üstteki  : -")
+
+        # TEŞHİS
+        if yeni:
+            print(f"  → SAĞLIKLI. {len(yeni)} yeni ilan var, sıradaki taramada gelecek.")
+        elif gecen is not None and gecen > stale_days:
+            print(f"  → ŞÜPHELİ. {gecen:.0f} gündür hiç yeni ilan yok ve sayfadaki")
+            print(f"    {len(passed)} ilanın hepsi zaten görülmüş.")
+            print("    EN OLASI SEBEP: arama adresi 'en yeni' sıralı değil.")
+            print("    Siteye gir, sıralamayı 'Yeni Eklenenler' yap ve adres")
+            print("    çubuğundaki YENİ adresi config.yaml'daki url satırına koy.")
+            print("    (Sıralama yanlışsa yeni ilanlar 1. sayfaya hiç düşmez.)")
+            sorunlu += 1
+        else:
+            print("  → NORMAL. Sayfa okunuyor, şu an yeni ilan yok.")
+        print()
+
+    print("=" * 68)
+    if sorunlu:
+        print(f"  {sorunlu} kaynakta dikkat edilmesi gereken durum var.")
+    else:
+        print("  Tüm kaynaklar sağlıklı.")
+    print()
+    return 1 if sorunlu else 0
 
 
 def run_test_notify(config: dict, notifier: notify.TelegramNotifier) -> int:
@@ -201,6 +287,8 @@ def main() -> int:
                     help="görülen ilan kayıtlarını sil ve çık")
     ap.add_argument("--test-notify", action="store_true",
                     help="Telegram ayarlarını dene: test mesajı gönder ve çık")
+    ap.add_argument("--doctor", action="store_true",
+                    help="kaynakların sağlığını raporla (hiçbir şeyi değiştirmez)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -219,6 +307,9 @@ def main() -> int:
         return 0
 
     config = load_config(ROOT / args.config)
+
+    if args.doctor:
+        return run_doctor(config, config.get("defaults", {}))
 
     if args.test_notify:
         try:
