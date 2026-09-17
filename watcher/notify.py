@@ -170,6 +170,51 @@ def format_item(item: dict, source_label: str) -> str:
     return "\n".join(lines)
 
 
+def _fiyat_yaz(deger: float | None, ornek_metin: str | None) -> str:
+    """Sayıyı, sitenin kendi fiyat biçimine benzeterek yazar (£375,000 gibi)."""
+    if deger is None:
+        return "?"
+    tam = f"{deger:,.0f}"                       # 375,000
+    if ornek_metin:
+        if "." in ornek_metin and "," not in ornek_metin:
+            tam = tam.replace(",", ".")         # site nokta kullanıyorsa
+        sembol = "".join(ch for ch in ornek_metin if ch in "£$€₺")
+        if sembol:
+            return f"{sembol[0]}{tam}"
+        if "tl" in ornek_metin.lower():
+            return f"{tam} TL"
+    return tam
+
+
+def format_price_change(item: dict, eski: float, yeni: float,
+                        source_label: str) -> str:
+    """Fiyatı değişen bir ilan için mesaj."""
+    dusus = yeni < eski
+    fark = abs(yeni - eski)
+    yuzde = (fark / eski * 100) if eski else 0
+
+    baslik_satiri = ("💸 <b>FİYAT DÜŞTÜ</b>" if dusus else "📈 <b>Fiyat arttı</b>")
+    ornek = item.get("price_text")
+    eski_s = _fiyat_yaz(eski, ornek)
+    yeni_s = _fiyat_yaz(yeni, ornek)
+    fark_s = _fiyat_yaz(fark, ornek)
+    ok = "↓" if dusus else "↑"
+
+    title = _esc(item.get("title") or "(başlıksız ilan)")
+    link = item.get("link")
+
+    lines = [f"{baslik_satiri} — {_esc(source_label)}"]
+    lines.append(f'<b><a href="{_esc_attr(link)}">{title}</a></b>' if link
+                 else f"<b>{title}</b>")
+    lines.append(f"<s>{_esc(eski_s)}</s>  →  <b>{_esc(yeni_s)}</b>")
+    lines.append(f"{ok} {_esc(fark_s)} ({yuzde:.1f}%)")
+    if item.get("location"):
+        lines.append(f"📍 {_esc(item['location'])}")
+    if link:
+        lines.append(f"\n{_esc(link)}")
+    return "\n".join(lines)
+
+
 def format_digest(items: list[dict], source_label: str) -> str:
     """Çok sayıda ilanı tek özet mesajda toplar."""
     lines = [f"🔔 <b>{source_label}</b> — {len(items)} yeni ilan\n"]
