@@ -8,6 +8,15 @@ defaults:
   delay_between_sources: 3
   digest_threshold: 6         # bu kadar veya daha fazla yeni ilan varsa tek özet mesaj
 
+  # Fiyat değişimi takibi — aynı ilanın fiyatı değişince haber verir.
+  #   any  : hem düşüş hem artış (varsayılan)
+  #   down : sadece fiyat düşüşleri
+  #   none : kapalı
+  notify_price_changes: any
+  price_change_min_pct: 0.5   # bu yüzdenin altındaki oynamalar yok sayılır
+
+  stale_after_days: 7         # bu kadar gün yeni ilan gelmezse log'a uyarı düşer
+
 notify_errors: true
 
 sources:
