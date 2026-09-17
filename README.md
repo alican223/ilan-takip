@@ -81,6 +81,28 @@ Site ilanları bir API'den çekiyorsa (DevTools → Network → Fetch/XHR) HTML 
       link: "detailUrl"
 ```
 
+### Fiyat değişimi takibi
+
+Sistem her ilanın son görülen fiyatını da saklar. Aynı ilanın fiyatı değişince ayrı bir mesaj gönderir:
+
+```
+💸 FİYAT DÜŞTÜ — 101evler — Lefkoşa Satılık 200m²+
+Gönyeli Bölgesinde Muhteşem Konumda 3+1 Geniş Bahçeli Villa
+£375,000  →  £340,000
+↓ £35,000 (9.3%)
+```
+
+`defaults` altında ya da tek bir kaynakta ayarlanır:
+
+```yaml
+  notify_price_changes: any    # any (varsayılan) | down | none
+  price_change_min_pct: 0.5    # bu yüzdenin altındaki oynamaları yok say
+```
+
+`price_change_min_pct` kur çevirimi veya yuvarlamadan doğan sahte değişimleri eler. Fiyatı okunamayan ilanlar karşılaştırmaya girmez.
+
+Hafıza dosyalarının biçimi `{"<ilan_id>": {"t": <ilk görülme>, "p": <son fiyat>}}`. Eski `{"<ilan_id>": <zaman>}` biçimi otomatik dönüştürülür — fiyatlar ilk taramada sessizce doldurulur, sahte "fiyat değişti" bildirimi üretilmez.
+
 ### Filtreler
 
 ```yaml
