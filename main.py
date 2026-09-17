@@ -108,9 +108,12 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
     if first_run_silent and new_items:
         log.info("[%s] ilk çalıştırma: %d ilan sessizce kaydedildi", name, len(new_items))
         for item in new_items:
-            store.mark(item["_id"])
+            store.mark(item["_id"], item.get("price"))
         store.save()
         return 0, 0
+
+    # Zaten bildiğimiz ilanların fiyatı değişmiş mi?
+    price_changes = _collect_price_changes(passed, store, source, defaults, name)
 
     sent = 0
     if new_items:
@@ -120,13 +123,25 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
             if notifier.send(notify.format_digest(new_items, label)):
                 sent += 1
                 for item in new_items:
-                    store.mark(item["_id"])
+                    store.mark(item["_id"], item.get("price"))
         else:
             for item in new_items:
                 if notifier.send(notify.format_item(item, label)):
                     sent += 1
-                    store.mark(item["_id"])
+                    store.mark(item["_id"], item.get("price"))
                     time.sleep(1)  # Telegram'ı yormayalım
+
+    for item, eski, yeni in price_changes:
+        if notifier.send(notify.format_price_change(item, eski, yeni, label)):
+            sent += 1
+            store.update_price(item["_id"], yeni)
+            time.sleep(1)
+
+    # Fiyatı değişmemiş ilanların kaydını da tazele (eski biçimden gelen
+    # fiyatsız kayıtlara fiyat yazılsın diye)
+    for item in passed:
+        if not store.is_new(item["_id"]) and store.price_of(item["_id"]) is None:
+            store.update_price(item["_id"], item.get("price"))
 
     store.save()
 
@@ -141,6 +156,38 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
                         name, gecen)
 
     return len(new_items), sent
+
+
+def _collect_price_changes(passed: list[dict], store: SeenStore, source: dict,
+                           defaults: dict, name: str) -> list[tuple[dict, float, float]]:
+    """Daha önce görülmüş ilanlardan fiyatı değişenleri bulur.
+
+    `notify_price_changes`: "any" (varsayılan) | "down" | "none"
+    `price_change_min_pct`: bu yüzdenin altındaki oynamalar yok sayılır.
+    """
+    mod = str(source.get("notify_price_changes",
+                         defaults.get("notify_price_changes", "any"))).lower()
+    if mod in ("none", "false", "hayir", "hayır"):
+        return []
+    min_pct = float(source.get("price_change_min_pct",
+                               defaults.get("price_change_min_pct", 0.5)))
+
+    degisenler = []
+    for item in passed:
+        if store.is_new(item["_id"]):
+            continue
+        eski, yeni = store.price_of(item["_id"]), item.get("price")
+        if eski is None or yeni is None or eski <= 0 or eski == yeni:
+            continue
+        if abs(yeni - eski) / eski * 100 < min_pct:
+            continue          # kur/yuvarlama kaynaklı ufak oynamalar
+        if mod == "down" and yeni > eski:
+            continue
+        degisenler.append((item, eski, yeni))
+
+    if degisenler:
+        log.info("[%s] fiyatı değişen %d ilan", name, len(degisenler))
+    return degisenler
 
 
 def run_doctor(config: dict, defaults: dict) -> int:
@@ -191,19 +238,28 @@ def run_doctor(config: dict, defaults: dict) -> int:
 
         print(f"  Canlı sayfa : {len(items)} ilan | filtreden geçen {len(passed)}"
               f" | bunların {gorulmus}'i zaten görülmüş, {len(yeni)}'i yeni")
-        print(f"  En üstteki  : {(passed[0].get('title') or '?')[:58]}"
-              if passed else "  En üstteki  : -")
+        if passed:
+            print("  Sayfadaki ilk 5 ilan:")
+            for sira, it in enumerate(passed[:5], 1):
+                isaret = "★ YENİ     " if store.is_new(it["_id"]) else "✓ görülmüş "
+                tarih = f"  [{it['date']}]" if it.get("date") else ""
+                print(f"    {sira}. {isaret}{(it.get('title') or '?')[:44]}{tarih}")
+            print("    (Site tarihi 'güncelleme' tarihi olabilir — emlakçı ilanı")
+            print("     yukarı taşıyınca tarih tazelenir ama ilan aynı ilandır.)")
 
         # TEŞHİS
         if yeni:
             print(f"  → SAĞLIKLI. {len(yeni)} yeni ilan var, sıradaki taramada gelecek.")
         elif gecen is not None and gecen > stale_days:
-            print(f"  → ŞÜPHELİ. {gecen:.0f} gündür hiç yeni ilan yok ve sayfadaki")
-            print(f"    {len(passed)} ilanın hepsi zaten görülmüş.")
-            print("    EN OLASI SEBEP: arama adresi 'en yeni' sıralı değil.")
-            print("    Siteye gir, sıralamayı 'Yeni Eklenenler' yap ve adres")
-            print("    çubuğundaki YENİ adresi config.yaml'daki url satırına koy.")
-            print("    (Sıralama yanlışsa yeni ilanlar 1. sayfaya hiç düşmez.)")
+            print(f"  → {gecen:.0f} gündür yeni ilan yok; sayfadaki {len(passed)} ilanın")
+            print("    hepsi zaten görülmüş. İki olasılık var:")
+            print("    1) Filtren dar ve siteye gerçekten yeni ilan girmemiş.")
+            print("       NORMALDİR. Yukarıdaki listede ilk sıradaki ilan uzun")
+            print("       süredir aynıysa ve sitede de o en üstteyse durum budur.")
+            print("    2) Arama adresi 'en yeni' sıralı değil — o zaman yeni")
+            print("       ilanlar 1. sayfaya hiç düşmez ve sistem onları göremez.")
+            print("       Siteye gir, sıralamayı 'Yeni Eklenenler' yap, adres")
+            print("       çubuğundaki YENİ adresi config.yaml'daki url'ye koy.")
             sorunlu += 1
         else:
             print("  → NORMAL. Sayfa okunuyor, şu an yeni ilan yok.")
