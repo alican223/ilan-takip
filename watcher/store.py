@@ -54,6 +54,11 @@ class SeenStore:
         last = self.last_new_at()
         return None if last is None else (time.time() - last) / 86400
 
+    def new_since(self, seconds: float) -> int:
+        """Son N saniyede kaç yeni ilan kaydedildi."""
+        esik = time.time() - seconds
+        return sum(1 for k in self._data.values() if k["t"] >= esik)
+
     # --- yazma ---------------------------------------------------------
 
     def mark(self, item_id: str, price: float | None = None) -> None:
