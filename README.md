@@ -81,6 +81,34 @@ Site ilanları bir API'den çekiyorsa (DevTools → Network → Fetch/XHR) HTML 
       link: "detailUrl"
 ```
 
+### Günlük "sistem çalışıyor" özeti
+
+Sessizliğin arıza mı yoksa gerçekten yeni ilan olmaması mı olduğunu anlamak için günde bir kez durum özeti gönderilir:
+
+```
+✅ İlan takip çalışıyor
+24.09.2026 11:52
+
+101evler — Lefkoşa Satılık 200m²+
+  30 ilan okundu · hafızada 37
+  son yeni ilan: 3 gün önce
+hangiev — Lefkoşa Villa/Müstakil 200m²+
+  30 ilan okundu · hafızada 101
+  son yeni ilan: 4 gün önce
+
+Son 24 saatte 1 yeni ilan bildirildi.
+```
+
+Bir kaynak hata verirse başlık ⚠️ olur ve o kaynağın altında hata yazar. Bir kaynak `stale_after_days`'i aşmışsa satırın sonunda ⚠️ çıkar.
+
+```yaml
+  daily_summary: true
+  daily_summary_hour: 11      # yerel saat
+  timezone_offset: 3          # UTC'ye göre saat farkı
+```
+
+Özet, o gün belirtilen saatten sonraki **ilk** taramada gider; tarama aralığı kadar (varsayılan 4 saat) sapabilir. Gönderim tarihi `state/_gunluk_ozet.json` içinde tutulur, böylece günde birden fazla gitmez.
+
 ### Fiyat değişimi takibi
 
 Sistem her ilanın son görülen fiyatını da saklar. Aynı ilanın fiyatı değişince ayrı bir mesaj gönderir:
@@ -100,6 +128,48 @@ Gönyeli Bölgesinde Muhteşem Konumda 3+1 Geniş Bahçeli Villa
 ```
 
 `price_change_min_pct` kur çevirimi veya yuvarlamadan doğan sahte değişimleri eler. Fiyatı okunamayan ilanlar karşılaştırmaya girmez.
+
+**Fiyat takibi ancak ilan o taramada sayfada görünüyorsa çalışır.** İndirimler ise genelde bir süredir bekleyen, "en yeni" sıralamasının 1. sayfasından çoktan düşmüş ilanlarda olur. İki çözüm var:
+
+**1) Sitenin kendi beslemesini kullan (tercih edilen).** Çoğu ilan sitesinde "Güncelleme Tarihi" ya da "Fiyatı Düşenler" sıralaması vardır. Bunlar için ayrı bir kaynak tanımla ve `notify_new: false` de — o beslemeye ilk kez düşen eski ilanlar "yeni ilan" sayılmaz, sadece fiyat değişimi bildirilir:
+
+```yaml
+  - name: site-fiyat-takip
+    label: "site — Fiyat takibi"
+    url: "https://site.com/arama?sort=guncelleme"
+    notify_new: false          # yeni ilan bildirme, sadece fiyat değişimi
+    selectors: *ayni_seciciler
+```
+
+Yeni ilan bildirimi ayrı bir kaynağın işi olur ve o kaynakta `notify_price_changes: none` yazılır. Böylece her iş tek bir kaynağa ait olur ve aynı değişim iki kez bildirilmez.
+
+Site indirimli ilanda **eski fiyatı da yazıyorsa** onu da oku; o zaman ilan ilk kez görülse bile indirim bildirilebilir:
+
+```yaml
+    prev_price_field: eski_fiyat
+    notify_on_first_run: true
+    selectors:
+      <<: *ayni_seciciler
+      eski_fiyat: "p.price small.reduced::text"
+```
+
+**2) Birkaç sayfa oku.** Sitede güncelleme sıralaması yoksa tek çare budur:
+
+```yaml
+  pages: 4                  # her sayfa ~30 ilan
+  page_param: page          # sitenin sayfa parametresinin adı
+  delay_between_pages: 2    # saniye
+```
+
+Sadece yeni ilan bildirimi istiyorsan `pages: 1` yeter — sıralama "en yeni" olduğu için yeni ilanlar zaten 1. sayfaya düşer.
+
+Sayfa sayısını artırdığında önceden görünmeyen onlarca ilan bir anda "yeni" sayılır. Bunu önlemek için emniyet supabı var:
+
+```yaml
+  max_new_per_run: 25       # tek taramada bundan fazla yeni çıkarsa
+```
+
+Aşılırsa hepsi sessizce kaydedilir ve tek bir bilgi mesajı gönderilir; sonraki taramalar normale döner. Aynı supap dedup anahtarının bozulması gibi durumlarda da seli önler.
 
 Hafıza dosyalarının biçimi `{"<ilan_id>": {"t": <ilk görülme>, "p": <son fiyat>}}`. Eski `{"<ilan_id>": <zaman>}` biçimi otomatik dönüştürülür — fiyatlar ilk taramada sessizce doldurulur, sahte "fiyat değişti" bildirimi üretilmez.
 
