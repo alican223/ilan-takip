@@ -6,24 +6,54 @@
 defaults:
   timeout: 30
   delay_between_sources: 3
-  digest_threshold: 6         # bu kadar veya daha fazla yeni ilan varsa tek özet mesaj
 
-  # Fiyat değişimi takibi — aynı ilanın fiyatı değişince haber verir.
+  # Bu sayıdan AZ yeni ilan varsa her biri ayrı mesaj olarak gelir;
+  # bu sayı ve üzerinde hepsi tek özet mesajda toplanır.
+  digest_threshold: 6
+
+  # Kaç sayfa okunsun? Her sayfa ~30 ilan.
+  # Aşağıdaki tasarımda kaynakların çoğu tek sayfa okuyor: yeni ilanlar
+  # "en yeni" sıralamasının 1. sayfasına, fiyat değişimleri de sitenin
+  # kendi "güncellenenler" / "fiyatı düşenler" beslemesine düşüyor.
+  pages: 1
+  page_param: page            # sitenin sayfa parametresinin adı
+  delay_between_pages: 2      # saniye — siteyi yormamak için
+
+  # Tek taramada bundan fazla "yeni" ilan çıkarsa bu bir akın değil,
+  # kapsam değişikliğidir. Sel gibi mesaj yerine sessizce kaydedilir.
+  max_new_per_run: 25
+
+  # Fiyat değişimi takibi
   #   any  : hem düşüş hem artış (varsayılan)
   #   down : sadece fiyat düşüşleri
   #   none : kapalı
   notify_price_changes: any
   price_change_min_pct: 0.5   # bu yüzdenin altındaki oynamalar yok sayılır
 
-  stale_after_days: 7         # bu kadar gün yeni ilan gelmezse log'a uyarı düşer
+  stale_after_days: 7         # bu kadar gün yeni ilan gelmezse log'a uyarı
+
+  # Günde bir kez "sistem çalışıyor" özeti gönderir.
+  # Saat, o gün bu saatten sonraki İLK taramada gönderilecek demektir;
+  # tarama 4 saatte bir olduğu için birkaç saat sapabilir.
+  daily_summary: true
+  daily_summary_hour: 11      # yerel saat
+  timezone_offset: 3          # UTC'ye göre saat farkı (KKTC: +3)
 
 notify_errors: true
 
+# =============================================================
+#  TASARIM: her siteden İKİ besleme
+#    1) "en yeni" sıralaması          → YENİ İLAN bildirimi
+#    2) sitenin güncelleme / indirim  → FİYAT DEĞİŞİMİ bildirimi
+#       beslemesi (notify_new: false)
+#  Böylece her besleme tek sayfa okur; onlarca sayfa taramaya gerek kalmaz.
+# =============================================================
+
 sources:
+
   # ---------------------------------------------------------
-  # 101evler — Lefkoşa satılık konut, 200m²+, seçili bölgeler
-  # Filtreler URL'nin içinde (min_m2, property_subtype, district)
-  # sort=li  → en yeni ilan başta
+  # 101evler — YENİ İLANLAR   (sort=li = "Ekleme Tarihi")
+  # İlan numarası artarak gider; en yeni ilan hep 1. sayfadadır.
   # ---------------------------------------------------------
   - name: 101evler-lefkosa-satilik
     label: "101evler — Lefkoşa Satılık 200m²+"
@@ -31,38 +61,44 @@ sources:
     url: "https://www.101evler.com/kibris/satilik-konut/lefkosa?min_m2=200&property_subtype=1,4&district=14,144,27&page=1&sort=li"
     base_url: "https://www.101evler.com"
     type: html
-    render: false              # sayfa sunucu tarafında üretiliyor, JS gerekmiyor
-
-    selectors:
+    render: false
+    selectors: &101evler_selectors
       item: "div.ilanitembasic"
       title: "h4.text-block-129::text"
-      price: "div.basicprice::text"                      # £ cinsinden
+      price: "div.basicprice::text"                        # £ cinsinden
       link: "a.hover-black::attr(href)"
       location: "div.text-block-131::text"
-      date: "div.text-block-132::text"
-      id: "div.text-block-132 ~ div.text-block-132::text"  # #566700 — dedup anahtarı
+      date: "div.text-block-132::text"                     # GÜNCELLEME tarihi
+      id: "div.text-block-132 ~ div.text-block-132::text"  # #570315 — dedup anahtarı
       alan: "div.text-block-130::text"
       oda: "div.text-block-130 ~ div.text-block-130::text"
       emlakci: "div.div-block-334::text"
-
-    # URL zaten filtreli olduğu için burada ek kural şart değil.
-    # İhtiyaç olursa aç — fiyatlar STERLİN (£) cinsindendir:
-    # filters:
-    #   max_price: 500000
-    #   min_price: 150000
-    #   include: ["gönyeli", "yenikent"]
-    #   exclude: ["proje", "maketten"]
-
-    notify_on_first_run: false   # ilk tarama mevcut 30 ilanı sessizce kaydeder
+    notify_price_changes: none   # fiyat işi aşağıdaki fiyat takibi kaynağının
+    notify_on_first_run: false
 
   # ---------------------------------------------------------
-  # hangiev.com — Lefkoşa (Gönyeli/Kanlıköy/Yenikent),
-  # villa + müstakil ev, min 3 yatak odası, min 200m²
-  # NOT: URL'de ikinci "?" yerine "&" olmalı, yoksa
-  #      subtypes/minbedrooms/minarea filtreleri yok sayılır.
-  # NOT: &sort=3 = "Yeni Eklenenler". BU PARAMETRE ŞART —
-  #      sitenin varsayılan sıralaması tarihe göre DEĞİL; onsuz yeni
-  #      ilanlar 1. sayfaya hiç düşmeyebilir ve hiç bildirim gelmez.
+  # 101evler — FİYAT TAKİBİ   (sort=mr = "Güncelleme Tarihi")
+  # İlanı güncellenen her kayıt buraya düşer; fiyat değişimi de bir
+  # güncellemedir. notify_new: false → buraya ilk kez düşen ESKİ ilanlar
+  # "yeni ilan" sayılmaz, sessizce kaydedilir. Yeni ilan bildirimi
+  # yukarıdaki kaynağın işi.
+  # 1 sayfa ~1,5 günlük güncellemeyi kapsıyor; pay bırakmak için 2.
+  # ---------------------------------------------------------
+  - name: 101evler-fiyat-takip
+    label: "101evler — Fiyat takibi"
+    enabled: true
+    url: "https://www.101evler.com/kibris/satilik-konut/lefkosa?min_m2=200&property_subtype=1,4&district=14,144,27&page=1&sort=mr"
+    base_url: "https://www.101evler.com"
+    type: html
+    render: false
+    notify_new: false
+    pages: 2
+    selectors: *101evler_selectors
+
+  # ---------------------------------------------------------
+  # hangiev — YENİ İLANLAR   (sort=3 = "Yeni Eklenenler")
+  # DİKKAT: sort=3 ŞART. Sitenin varsayılan sıralaması tarihe göre
+  # değil; onsuz yeni ilanlar 1. sayfaya hiç düşmez ve bildirim gelmez.
   # ---------------------------------------------------------
   - name: hangiev-lefkosa-satilik
     label: "hangiev — Lefkoşa Villa/Müstakil 200m²+"
@@ -70,19 +106,38 @@ sources:
     url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200&sort=3"
     base_url: "https://www.hangiev.com"
     type: html
-    render: false              # sunucu tarafında üretiliyor
-
-    selectors:
+    render: false
+    selectors: &hangiev_selectors
       item: "div.list-item"
-      title: "a.stretched-link::own_text"        # sadece <a>'nın kendi metni (konum hariç)
-      price: "p.price::text"                     # £ cinsinden
+      title: "a.stretched-link::own_text"        # sadece <a>'nın kendi metni
+      price: "p.price::own_text"                 # £ — güncel fiyat
       link: "a.stretched-link::attr(href)"
       location: "a.stretched-link span::text"
-      id: "::attr(data-propertyid)"              # kartın kendi özniteliği — dedup anahtarı
+      id: "::attr(data-propertyid)"              # kartın kendi özniteliği
       emlakci: "div.broker-name p::text"
-
-    # filters:
-    #   max_price: 500000     # sterlin
-    #   exclude: ["proje", "maketten"]
-
+    notify_price_changes: none   # fiyat işi aşağıdaki fiyat takibi kaynağının
     notify_on_first_run: false
+
+  # ---------------------------------------------------------
+  # hangiev — FİYAT DÜŞENLER   (sort=11 = "Fiyatı Düşenler")
+  # Sitenin KENDİ indirim beslemesi — fiyatı düşen ilanı site zaten
+  # buraya koyuyor, sayfa taramaya hiç gerek yok.
+  # ---------------------------------------------------------
+  - name: hangiev-fiyat-takip
+    label: "hangiev — Fiyat düşenler"
+    enabled: true
+    url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200&sort=11"
+    base_url: "https://www.hangiev.com"
+    type: html
+    render: false
+    notify_new: false
+    # Site indirimli ilanda ESKİ fiyatı da yazıyor:
+    #   <p class="price"> £325.000 <small class="reduced">£375.000</small> </p>
+    # Bu sayede ilanı ilk kez görsek bile indirimi bildirebiliyoruz.
+    prev_price_field: eski_fiyat
+    # Bu beslemedeki HER ilan zaten indirim yapmış demektir; ilk
+    # çalıştırmada da bildirilsin (besleme küçük, sel riski yok).
+    notify_on_first_run: true
+    selectors:
+      <<: *hangiev_selectors
+      eski_fiyat: "p.price small.reduced::text"
