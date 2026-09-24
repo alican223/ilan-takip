@@ -155,6 +155,10 @@ def format_item(item: dict, source_label: str) -> str:
         lines.append(f"📍 {_esc(item['location'])}")
     if item.get("date"):
         lines.append(f"🗓 {_esc(item['date'])}")
+    # İlan numarası: siteyle karşılaştırıp "bu bana geldi mi?" diye
+    # bakabilmek için. Sitedeki tarih güncellenebilir, numara değişmez.
+    if item.get("id"):
+        lines.append(f"🔖 İlan no: {_esc(item['id'])}")
 
     # Config'de tanımlanmış diğer serbest alanlar
     skip = {"title", "link", "price", "price_text", "location", "date", "image", "id"}
@@ -215,15 +219,47 @@ def format_price_change(item: dict, eski: float, yeni: float,
     return "\n".join(lines)
 
 
+def format_daily_summary(stats: list[dict], zaman_metni: str) -> str:
+    """Günlük 'sistem çalışıyor' özeti."""
+    sorunlu = [s for s in stats if s.get("hata")]
+    baslik = "⚠️ <b>İlan takip — günlük özet</b>" if sorunlu else \
+             "✅ <b>İlan takip çalışıyor</b>"
+    lines = [baslik, f"<i>{_esc(zaman_metni)}</i>", ""]
+
+    toplam_yeni = 0
+    for s in stats:
+        lines.append(f"<b>{_esc(s['label'])}</b>")
+        if s.get("hata"):
+            lines.append(f"  ❌ {_esc(str(s['hata'])[:110])}")
+            continue
+
+        toplam_yeni += s.get("yeni_24s", 0)
+        lines.append(
+            f"  {s['sayfa']} ilan okundu · hafızada {s['hafiza']}"
+        )
+        gecen = s.get("gun_gecti")
+        if gecen is None:
+            lines.append("  son yeni ilan: henüz kayıt yok")
+        elif gecen < 1:
+            lines.append("  son yeni ilan: bugün")
+        else:
+            uyari = "  ⚠️" if gecen > s.get("stale_limit", 7) else ""
+            lines.append(f"  son yeni ilan: {gecen:.0f} gün önce{uyari}")
+
+    lines.append("")
+    lines.append(f"Son 24 saatte <b>{toplam_yeni}</b> yeni ilan bildirildi."
+                 if toplam_yeni else "Son 24 saatte yeni ilan çıkmadı.")
+    return "\n".join(lines)
+
+
 def format_digest(items: list[dict], source_label: str) -> str:
     """Çok sayıda ilanı tek özet mesajda toplar."""
     lines = [f"🔔 <b>{source_label}</b> — {len(items)} yeni ilan\n"]
-    for item in items:
+    for sira, item in enumerate(items, 1):
         title = _esc(item.get("title") or "(başlıksız)")
         link = item.get("link")
         price = f" — {_esc(item['price_text'])}" if item.get("price_text") else ""
-        lines.append(
-            f'• <a href="{_esc_attr(link)}">{title}</a>{price}' if link
-            else f"• {title}{price}"
-        )
+        no = f" · <code>{_esc(item['id'])}</code>" if item.get("id") else ""
+        govde = (f'<a href="{_esc_attr(link)}">{title}</a>' if link else title)
+        lines.append(f"{sira}. {govde}{price}{no}")
     return "\n".join(lines)
