@@ -13,12 +13,15 @@ Kullanım:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import random
 import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yaml
 
@@ -74,26 +77,99 @@ def _diagnose_empty(name: str, body: str, source: dict) -> None:
                 name, item_sel, source["url"])
 
 
+def _sayfa_url(url: str, param: str, sayfa: int) -> str:
+    """URL'deki sayfa parametresini verilen değere ayarlar (yoksa ekler)."""
+    parcalar = urlsplit(url)
+    sorgu = parse_qsl(parcalar.query, keep_blank_values=True)
+    sorgu = [(k, v) for k, v in sorgu if k != param]
+    sorgu.append((param, str(sayfa)))
+    return urlunsplit(parcalar._replace(query=urlencode(sorgu)))
+
+
+def _fetch_pages(source: dict, defaults: dict) -> tuple[list[dict], str]:
+    """Kaynağın ilk N sayfasını okur. (ilanlar, ilk_sayfanın_gövdesi) döner.
+
+    Fiyat takibi için önemli: indirimler genelde bir süredir bekleyen,
+    1. sayfadan düşmüş ilanlarda olur. `pages` bunları da kapsar.
+    """
+    name = source["name"]
+    kac = max(1, int(source.get("pages", defaults.get("pages", 1))))
+    param = source.get("page_param", defaults.get("page_param", "page"))
+    bekleme = float(source.get("delay_between_pages",
+                               defaults.get("delay_between_pages", 2)))
+
+    hepsi: list[dict] = []
+    gorulen: set[str] = set()
+    ilk_govde = ""
+
+    for sayfa in range(1, kac + 1):
+        url = source["url"] if kac == 1 else _sayfa_url(source["url"], param, sayfa)
+        govde = fetch(
+            url,
+            render=source.get("render", False),
+            timeout=source.get("timeout", defaults.get("timeout", 30)),
+            headers=source.get("headers"),
+            wait_selector=source.get("wait_selector"),
+            warmup_url=source.get("warmup_url") if sayfa == 1 else None,
+        )
+        if sayfa == 1:
+            ilk_govde = govde
+
+        sayfa_ilanlari = parse.parse(govde, source)
+        if not sayfa_ilanlari:
+            if sayfa > 1:
+                log.debug("[%s] %d. sayfa boş, durduruluyor", name, sayfa)
+            break
+
+        # Site sayfa parametresini yok sayıyorsa aynı ilanlar gelir — tekrarı at
+        yeni = [i for i in sayfa_ilanlari if i["_id"] not in gorulen]
+        if sayfa > 1 and not yeni:
+            log.warning("[%s] %d. sayfa 1. sayfayla aynı geldi — sayfalama "
+                        "çalışmıyor olabilir (page_param yanlış?)", name, sayfa)
+            break
+
+        gorulen.update(i["_id"] for i in yeni)
+        hepsi.extend(yeni)
+
+        if sayfa < kac:
+            time.sleep(bekleme)
+
+    if kac > 1:
+        log.info("[%s] %d sayfadan toplam %d ilan okundu", name, kac, len(hepsi))
+    return hepsi, ilk_govde
+
+
 def run_source(source: dict, notifier: notify.TelegramNotifier,
-               defaults: dict) -> tuple[int, int]:
-    """Tek bir kaynağı tarar. (yeni_ilan_sayısı, gönderilen_mesaj) döner."""
+               defaults: dict, stats_out: list | None = None) -> tuple[int, int]:
+    """Tek bir kaynağı tarar. (yeni_ilan_sayısı, gönderilen_mesaj) döner.
+
+    stats_out verilirse günlük özet için kaynak durumu oraya eklenir.
+    """
     name = source["name"]
     label = source.get("label", name)
     store = SeenStore(name)
 
-    body = fetch(
-        source["url"],
-        render=source.get("render", False),
-        timeout=source.get("timeout", defaults.get("timeout", 30)),
-        headers=source.get("headers"),
-        wait_selector=source.get("wait_selector"),
-        warmup_url=source.get("warmup_url"),
-    )
+    durum = {
+        "name": name, "label": label, "sayfa": 0, "hafiza": 0,
+        "gun_gecti": None, "yeni_24s": 0,
+        "stale_limit": source.get("stale_after_days",
+                                  defaults.get("stale_after_days", 7)),
+    }
 
-    items = parse.parse(body, source)
+    def _kaydet():
+        durum["hafiza"] = len(store)
+        durum["gun_gecti"] = store.days_since_last_new()
+        durum["yeni_24s"] = store.new_since(86400)
+        if stats_out is not None:
+            stats_out.append(durum)
+
+    items, body = _fetch_pages(source, defaults)
+    durum["sayfa"] = len(items)
     log.info("[%s] sayfada %d kayıt bulundu", name, len(items))
     if not items:
         _diagnose_empty(name, body, source)
+        durum["hata"] = "sayfada hiç ilan bulunamadı (seçici ya da engel sorunu)"
+        _kaydet()
         return 0, 0
 
     passed, rejected = filters.apply(items, source.get("filters"))
@@ -110,7 +186,56 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
         for item in new_items:
             store.mark(item["_id"], item.get("price"))
         store.save()
+        _kaydet()
         return 0, 0
+
+    # Bu kaynak sadece fiyat değişimi için mi? (örn. "güncellenenler" ya da
+    # "fiyatı düşenler" beslemesi) O zaman ilk kez görülen ilanlar "yeni ilan"
+    # değildir — sadece o beslemeye yeni düşmüşlerdir. Sessizce kaydedilir.
+    if not source.get("notify_new", True):
+        # ÖNCE fiyat değişimlerini topla: site eski fiyatı kendisi veriyorsa
+        # (prev_price_field) ilanı ilk kez görsek bile indirimi yakalayalım.
+        price_changes = _collect_price_changes(passed, store, source,
+                                               defaults, name)
+        if new_items:
+            log.info("[%s] %d ilan bu beslemeye ilk kez düştü, sessizce "
+                     "kaydedildi (notify_new: false)", name, len(new_items))
+            for item in new_items:
+                store.mark(item["_id"], item.get("price"))
+        sent = 0
+        for item, eski, yeni in price_changes:
+            if notifier.send(notify.format_price_change(item, eski, yeni, label)):
+                sent += 1
+                store.update_price(item["_id"], yeni)
+                time.sleep(1)
+        for item in passed:
+            if not store.is_new(item["_id"]) and store.price_of(item["_id"]) is None:
+                store.update_price(item["_id"], item.get("price"))
+        store.save()
+        _kaydet()
+        return 0, sent
+
+    # EMNİYET SUPABI: bir anda çok fazla "yeni" ilan çıktıysa bu gerçek bir
+    # akın değil, kapsam değişikliğidir (sayfa sayısı arttı, filtre gevşedi,
+    # dedup anahtarı değişti...). 150 mesajla boğmak yerine sessizce yut.
+    max_new = int(source.get("max_new_per_run",
+                             defaults.get("max_new_per_run", 25)))
+    if len(new_items) > max_new:
+        log.warning("[%s] tek seferde %d yeni ilan çıktı (sınır %d) — kapsam "
+                    "değişmiş olmalı, hepsi sessizce kaydedildi.",
+                    name, len(new_items), max_new)
+        for item in new_items:
+            store.mark(item["_id"], item.get("price"))
+        store.save()
+        notifier.send(
+            f"ℹ️ <b>{notify._esc(label)}</b>\n"
+            f"Tek taramada {len(new_items)} yeni ilan çıktı — bu normal bir akın "
+            f"değil, kapsam değişikliği gibi görünüyor (sayfa sayısı artmış "
+            f"olabilir).\nHepsi sessizce kaydedildi; bundan sonraki yeni ilanlar "
+            f"normal şekilde bildirilecek."
+        )
+        _kaydet()
+        return len(new_items), 1
 
     # Zaten bildiğimiz ilanların fiyatı değişmiş mi?
     price_changes = _collect_price_changes(passed, store, source, defaults, name)
@@ -144,6 +269,7 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
             store.update_price(item["_id"], item.get("price"))
 
     store.save()
+    _kaydet()
 
     # Uzun süredir yeni ilan gelmiyorsa bu bir arıza olabilir — sessizce
     # geçme. En sık sebebi arama adresinin "en yeni" sıralı olmaması.
@@ -156,6 +282,46 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
                         name, gecen)
 
     return len(new_items), sent
+
+
+DAILY_STATE = STATE_DIR / "_gunluk_ozet.json"
+
+
+def _maybe_send_daily_summary(config: dict, notifier: notify.TelegramNotifier,
+                              stats: list[dict], dry_run: bool) -> None:
+    """Günde bir kez 'sistem çalışıyor' özeti gönderir.
+
+    Tarama 4 saatte bir çalıştığı için özet, ayarlanan saatten sonraki
+    İLK taramada gider. Gönderim tarihi state/_gunluk_ozet.json'da tutulur.
+    """
+    defaults = config.get("defaults", {})
+    if not defaults.get("daily_summary", False) or not stats:
+        return
+
+    hedef_saat = int(defaults.get("daily_summary_hour", 11))
+    offset = float(defaults.get("timezone_offset", 0))
+    simdi = datetime.now(timezone.utc) + timedelta(hours=offset)
+    bugun = simdi.strftime("%Y-%m-%d")
+
+    try:
+        kayit = json.loads(DAILY_STATE.read_text("utf-8")) if DAILY_STATE.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        kayit = {}
+
+    if kayit.get("son") == bugun:
+        return                                  # bugün zaten gönderildi
+    if simdi.hour < hedef_saat:
+        return                                  # saati henüz gelmedi
+
+    metin = notify.format_daily_summary(stats, simdi.strftime("%d.%m.%Y %H:%M"))
+    if notifier.send(metin):
+        log.info("Günlük özet gönderildi.")
+        if not dry_run:
+            try:
+                DAILY_STATE.parent.mkdir(parents=True, exist_ok=True)
+                DAILY_STATE.write_text(json.dumps({"son": bugun}), "utf-8")
+            except OSError as exc:
+                log.warning("Günlük özet tarihi yazılamadı: %s", exc)
 
 
 def _collect_price_changes(passed: list[dict], store: SeenStore, source: dict,
@@ -171,12 +337,19 @@ def _collect_price_changes(passed: list[dict], store: SeenStore, source: dict,
         return []
     min_pct = float(source.get("price_change_min_pct",
                                defaults.get("price_change_min_pct", 0.5)))
+    # Bazı siteler indirimli ilanda ESKİ fiyatı da yazar (hangiev'in
+    # "Fiyatı Düşenler" beslemesi gibi). Böyle bir alan tanımlıysa, ilanı
+    # ilk kez görsek bile indirimi bildirebiliriz.
+    onceki_alan = source.get("prev_price_field")
 
     degisenler = []
     for item in passed:
-        if store.is_new(item["_id"]):
-            continue
-        eski, yeni = store.price_of(item["_id"]), item.get("price")
+        yeni = item.get("price")
+        eski = store.price_of(item["_id"])
+        if eski is None and onceki_alan:
+            eski = parse.parse_price(item.get(onceki_alan))
+        if eski is None and store.is_new(item["_id"]):
+            continue                      # karşılaştıracak eski fiyat yok
         if eski is None or yeni is None or eski <= 0 or eski == yeni:
             continue
         if abs(yeni - eski) / eski * 100 < min_pct:
@@ -211,15 +384,7 @@ def run_doctor(config: dict, defaults: dict) -> int:
               else " | henüz hiç kayıt yok")
 
         try:
-            body = fetch(
-                source["url"],
-                render=source.get("render", False),
-                timeout=source.get("timeout", defaults.get("timeout", 30)),
-                headers=source.get("headers"),
-                wait_selector=source.get("wait_selector"),
-                warmup_url=source.get("warmup_url"),
-            )
-            items = parse.parse(body, source)
+            items, body = _fetch_pages(source, defaults)
         except Exception as exc:  # noqa: BLE001
             print(f"  ✗ SAYFA İNDİRİLEMEDİ: {exc}\n")
             sorunlu += 1
@@ -242,8 +407,9 @@ def run_doctor(config: dict, defaults: dict) -> int:
             print("  Sayfadaki ilk 5 ilan:")
             for sira, it in enumerate(passed[:5], 1):
                 isaret = "★ YENİ     " if store.is_new(it["_id"]) else "✓ görülmüş "
+                no = f"{it['id']:>9}  " if it.get("id") else ""
                 tarih = f"  [{it['date']}]" if it.get("date") else ""
-                print(f"    {sira}. {isaret}{(it.get('title') or '?')[:44]}{tarih}")
+                print(f"    {sira}. {isaret}{no}{(it.get('title') or '?')[:38]}{tarih}")
             print("    (Site tarihi 'güncelleme' tarihi olabilir — emlakçı ilanı")
             print("     yukarı taşıyınca tarih tazelenir ama ilan aynı ilandır.)")
 
@@ -387,21 +553,28 @@ def main() -> int:
 
     total_new = total_sent = 0
     failures: list[str] = []
+    stats: list[dict] = []
 
     for index, source in enumerate(sources):
         if not source.get("enabled", True):
             log.info("[%s] devre dışı, atlanıyor", source["name"])
             continue
         try:
-            new_count, sent = run_source(source, notifier, defaults)
+            new_count, sent = run_source(source, notifier, defaults, stats)
             total_new += new_count
             total_sent += sent
         except (FetchError, ValueError) as exc:
             log.error("[%s] HATA: %s", source["name"], exc)
             failures.append(f"{source['name']}: {exc}")
+            stats.append({"name": source["name"],
+                          "label": source.get("label", source["name"]),
+                          "hata": str(exc)})
         except Exception as exc:  # noqa: BLE001
             log.exception("[%s] beklenmeyen hata", source["name"])
             failures.append(f"{source['name']}: {exc}")
+            stats.append({"name": source["name"],
+                          "label": source.get("label", source["name"]),
+                          "hata": str(exc)})
 
         if index < len(sources) - 1:
             time.sleep(defaults.get("delay_between_sources", 3) + random.uniform(0, 2))
@@ -411,6 +584,9 @@ def main() -> int:
     # Hataları da bildir ki sistem sessizce ölmesin
     if failures and config.get("notify_errors", True) and not args.dry_run:
         notifier.send("⚠️ <b>Takip hatası</b>\n" + "\n".join(f"• {f}" for f in failures[:5]))
+
+    # Günde bir kez "sistem çalışıyor" özeti
+    _maybe_send_daily_summary(config, notifier, stats, args.dry_run)
 
     # Telegram gönderimi patladıysa çalıştırma YEŞİL görünmemeli —
     # yoksa bildirim gitmediği hâlde her şey yolunda sanılır.
