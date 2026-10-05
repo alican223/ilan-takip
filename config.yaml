@@ -100,6 +100,25 @@ sources:
     pages: 2
     selectors: *101evler_selectors
 
+  # =========================================================
+  #  ⛔ hangiev KAYNAKLARI KAPALI (Ekim 2026)
+  #
+  #  Site, veri merkezi IP'lerinden gelen istekleri ilan listeleme
+  #  sayfalarında reddediyor. Denenenler ve sonuçları:
+  #    - güncel tarayıcı UA + Sec-CH-UA tutarlılığı ......... 403
+  #    - ana sayfa ısınması + çerez + Referer ............... 403
+  #    - gerçek Chromium (Playwright), ısınma + Referer ..... 403
+  #    - ana sayfanın kendisi (aynı IP, aynı tarayıcı) ...... 200
+  #  Yani engel başlık/tarayıcı kaynaklı değil; sadece içerik
+  #  sayfaları veri merkezi IP'lerine kapalı.
+  #
+  #  Geri açmak için: taramayı kendi ağında çalıştır
+  #  (bkz. KENDI-SUNUCUNDA-CALISTIRMA.md), sonra aşağıdaki iki
+  #  kaynakta enabled: false -> true yap. Ayarlar hazır duruyor.
+  #  render: true kalsın diye playwright gerekir; requirements.txt
+  #  ve watch.yml içindeki ilgili satırları da geri aç.
+  # =========================================================
+
   # ---------------------------------------------------------
   # hangiev — YENİ İLANLAR   (sort=3 = "Yeni Eklenenler")
   # DİKKAT: sort=3 ŞART. Sitenin varsayılan sıralaması tarihe göre
@@ -107,7 +126,7 @@ sources:
   # ---------------------------------------------------------
   - name: hangiev-lefkosa-satilik
     label: "hangiev — Lefkoşa Villa/Müstakil 200m²+"
-    enabled: true
+    enabled: false
     url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200&sort=3"
     base_url: "https://www.hangiev.com"
     type: html
@@ -134,7 +153,7 @@ sources:
   # ---------------------------------------------------------
   - name: hangiev-fiyat-takip
     label: "hangiev — Fiyat düşenler"
-    enabled: true
+    enabled: false
     url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200&sort=11"
     base_url: "https://www.hangiev.com"
     type: html
