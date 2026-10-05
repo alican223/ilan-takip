@@ -111,9 +111,10 @@ sources:
     url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200&sort=3"
     base_url: "https://www.hangiev.com"
     type: html
-    render: false
-    # Site çerezsiz isteği 403 ile reddediyor (Ekim 2026'da başladı).
-    # Önce ana sayfa ziyaret edilip çerez alınır, sonra Referer ile girilir.
+    # Site Ekim 2026'da 403 vermeye başladı; düz HTTP isteği (güncel UA +
+    # çerez + ısınma ile bile) reddedildi. Gerçek Chromium deneniyor.
+    render: true
+    wait_selector: "div.list-item"
     warmup_url: "https://www.hangiev.com/"
     selectors: &hangiev_selectors
       item: "div.list-item"
@@ -137,7 +138,8 @@ sources:
     url: "https://www.hangiev.com/lefkosa-satilik-evler?bolge=gonyeli,kanlikoy,yenikent&subtypes=villa%2Cmustakil-ev&minbedrooms=3&minarea=200&sort=11"
     base_url: "https://www.hangiev.com"
     type: html
-    render: false
+    render: true
+    wait_selector: "div.list-item"
     warmup_url: "https://www.hangiev.com/"
     notify_new: false
     # Site indirimli ilanda ESKİ fiyatı da yazıyor:
