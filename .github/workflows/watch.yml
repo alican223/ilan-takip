@@ -41,11 +41,9 @@ jobs:
       - name: Bağımlılıkları kur
         run: pip install -r requirements.txt
 
-      # JS ile yüklenen site takip ediyorsan (config'de render: true) bu adımı aç:
-      # - name: Playwright kur
-      #   run: |
-      #     pip install playwright
-      #     playwright install --with-deps chromium
+      # config'de render: true olan kaynak var (hangiev)
+      - name: Playwright kur
+        run: playwright install --with-deps chromium
 
       - name: Taramayı çalıştır
         env:
