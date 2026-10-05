@@ -26,7 +26,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import yaml
 
 from watcher import filters, notify, parse
-from watcher.fetch import FetchError, fetch
+from watcher.fetch import FetchError, fetch, make_session, warmup
 from watcher.store import STATE_DIR, SeenStore
 
 ROOT = Path(__file__).resolve().parent
@@ -101,16 +101,28 @@ def _fetch_pages(source: dict, defaults: dict) -> tuple[list[dict], str]:
     hepsi: list[dict] = []
     gorulen: set[str] = set()
     ilk_govde = ""
+    timeout = source.get("timeout", defaults.get("timeout", 30))
+    render = source.get("render", False)
+
+    # TEK oturum, tüm sayfalar için: ısınma isteğinde alınan çerezler
+    # sayfalar arasında korunsun. Her sayfa için yeni oturum açılırsa
+    # çerez kaybolur ve çerez isteyen siteler 403 döndürür.
+    oturum = None
+    if not render:
+        oturum = make_session(source.get("headers"),
+                              source.get("user_agent",
+                                         defaults.get("user_agent")))
+        if source.get("warmup_url"):
+            warmup(oturum, source["warmup_url"], timeout)
 
     for sayfa in range(1, kac + 1):
         url = source["url"] if kac == 1 else _sayfa_url(source["url"], param, sayfa)
         govde = fetch(
             url,
-            render=source.get("render", False),
-            timeout=source.get("timeout", defaults.get("timeout", 30)),
-            headers=source.get("headers"),
+            render=render,
+            timeout=timeout,
             wait_selector=source.get("wait_selector"),
-            warmup_url=source.get("warmup_url") if sayfa == 1 else None,
+            session=oturum,
         )
         if sayfa == 1:
             ilk_govde = govde
@@ -285,6 +297,43 @@ def run_source(source: dict, notifier: notify.TelegramNotifier,
 
 
 DAILY_STATE = STATE_DIR / "_gunluk_ozet.json"
+ERROR_STATE = STATE_DIR / "_hata_bildirim.json"
+
+
+def _notify_failures(config: dict, notifier: notify.TelegramNotifier,
+                     failures: list[tuple[str, str]], dry_run: bool) -> None:
+    """Hataları bildirir ama kaynak başına GÜNDE BİR KEZ.
+
+    Bir site engellenirse hata her taramada tekrarlanır; 4 saatte bir aynı
+    mesajı göndermek bildirimleri işe yaramaz hale getirir.
+    """
+    if not failures or not config.get("notify_errors", True) or dry_run:
+        return
+
+    offset = float(config.get("defaults", {}).get("timezone_offset", 0))
+    bugun = (datetime.now(timezone.utc) + timedelta(hours=offset)).strftime("%Y-%m-%d")
+    try:
+        kayit = json.loads(ERROR_STATE.read_text("utf-8")) if ERROR_STATE.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        kayit = {}
+
+    yeni = [(ad, mesaj) for ad, mesaj in failures if kayit.get(ad) != bugun]
+    if not yeni:
+        log.info("%d hata var ama bugün zaten bildirildi, tekrar gönderilmiyor.",
+                 len(failures))
+        return
+
+    satirlar = "\n".join(f"• <b>{notify._esc(ad)}</b>\n  {notify._esc(mesaj[:150])}"
+                         for ad, mesaj in yeni[:5])
+    if notifier.send("⚠️ <b>Takip hatası</b>\n" + satirlar +
+                     "\n\n<i>Bu hata bugün tekrar bildirilmeyecek.</i>"):
+        for ad, _ in yeni:
+            kayit[ad] = bugun
+        try:
+            ERROR_STATE.parent.mkdir(parents=True, exist_ok=True)
+            ERROR_STATE.write_text(json.dumps(kayit), "utf-8")
+        except OSError as exc:
+            log.warning("Hata bildirim tarihi yazılamadı: %s", exc)
 
 
 def _maybe_send_daily_summary(config: dict, notifier: notify.TelegramNotifier,
@@ -552,7 +601,7 @@ def main() -> int:
     notifier = notify.TelegramNotifier(dry_run=args.dry_run)
 
     total_new = total_sent = 0
-    failures: list[str] = []
+    failures: list[tuple[str, str]] = []
     stats: list[dict] = []
 
     for index, source in enumerate(sources):
@@ -565,13 +614,13 @@ def main() -> int:
             total_sent += sent
         except (FetchError, ValueError) as exc:
             log.error("[%s] HATA: %s", source["name"], exc)
-            failures.append(f"{source['name']}: {exc}")
+            failures.append((source["name"], str(exc)))
             stats.append({"name": source["name"],
                           "label": source.get("label", source["name"]),
                           "hata": str(exc)})
         except Exception as exc:  # noqa: BLE001
             log.exception("[%s] beklenmeyen hata", source["name"])
-            failures.append(f"{source['name']}: {exc}")
+            failures.append((source["name"], str(exc)))
             stats.append({"name": source["name"],
                           "label": source.get("label", source["name"]),
                           "hata": str(exc)})
@@ -581,9 +630,8 @@ def main() -> int:
 
     log.info("Bitti — %d yeni ilan, %d mesaj gönderildi.", total_new, total_sent)
 
-    # Hataları da bildir ki sistem sessizce ölmesin
-    if failures and config.get("notify_errors", True) and not args.dry_run:
-        notifier.send("⚠️ <b>Takip hatası</b>\n" + "\n".join(f"• {f}" for f in failures[:5]))
+    # Hataları da bildir ki sistem sessizce ölmesin (günde bir kez)
+    _notify_failures(config, notifier, failures, args.dry_run)
 
     # Günde bir kez "sistem çalışıyor" özeti
     _maybe_send_daily_summary(config, notifier, stats, args.dry_run)
