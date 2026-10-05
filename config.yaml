@@ -32,6 +32,11 @@ defaults:
 
   stale_after_days: 7         # bu kadar gün yeni ilan gelmezse log'a uyarı
 
+  # Tarayıcı kimliği. Bot korumaları ESKİMİŞ sürümleri eler — yılda bir
+  # güncelle. Güncel sürüm için tarayıcı konsoluna: navigator.userAgent
+  # Boş bırakılırsa koddaki varsayılan (Chrome 152) kullanılır.
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+
   # Günde bir kez "sistem çalışıyor" özeti gönderir.
   # Saat, o gün bu saatten sonraki İLK taramada gönderilecek demektir;
   # tarama 4 saatte bir olduğu için birkaç saat sapabilir.
@@ -107,15 +112,9 @@ sources:
     base_url: "https://www.hangiev.com"
     type: html
     render: false
+    # Site çerezsiz isteği 403 ile reddediyor (Ekim 2026'da başladı).
+    # Önce ana sayfa ziyaret edilip çerez alınır, sonra Referer ile girilir.
     warmup_url: "https://www.hangiev.com/"
-    headers:
-      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-      Accept-Language: "tr-TR,tr;q=0.9,en;q=0.8"
-      Referer: "https://www.hangiev.com/"
-      Upgrade-Insecure-Requests: "1"
-      Sec-Fetch-Mode: "navigate"
-      Sec-Fetch-Site: "same-origin"
     selectors: &hangiev_selectors
       item: "div.list-item"
       title: "a.stretched-link::own_text"        # sadece <a>'nın kendi metni
@@ -140,14 +139,6 @@ sources:
     type: html
     render: false
     warmup_url: "https://www.hangiev.com/"
-    headers:
-      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-      Accept-Language: "tr-TR,tr;q=0.9,en;q=0.8"
-      Referer: "https://www.hangiev.com/"
-      Upgrade-Insecure-Requests: "1"
-      Sec-Fetch-Mode: "navigate"
-      Sec-Fetch-Site: "same-origin"
     notify_new: false
     # Site indirimli ilanda ESKİ fiyatı da yazıyor:
     #   <p class="price"> £325.000 <small class="reduced">£375.000</small> </p>
