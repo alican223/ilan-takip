@@ -123,6 +123,10 @@ def _fetch_pages(source: dict, defaults: dict) -> tuple[list[dict], str]:
             timeout=timeout,
             wait_selector=source.get("wait_selector"),
             session=oturum,
+            # render yolunda ısınma her sayfada tarayıcı bağlamıyla yapılır;
+            # HTTP yolunda oturum zaten ısıtıldığı için tekrar gerekmez.
+            warmup_url=source.get("warmup_url") if render else None,
+            user_agent=source.get("user_agent", defaults.get("user_agent")),
         )
         if sayfa == 1:
             ilk_govde = govde
