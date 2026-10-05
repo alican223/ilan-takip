@@ -41,9 +41,10 @@ jobs:
       - name: Bağımlılıkları kur
         run: pip install -r requirements.txt
 
-      # config'de render: true olan kaynak var (hangiev)
-      - name: Playwright kur
-        run: playwright install --with-deps chromium
+      # Etkin bir kaynakta render: true varsa bu adımı ve
+      # requirements.txt'teki playwright satırını aç:
+      # - name: Playwright kur
+      #   run: playwright install --with-deps chromium
 
       - name: Taramayı çalıştır
         env:
