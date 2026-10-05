@@ -75,13 +75,25 @@ def make_session(headers: dict | None = None,
 
 
 def warmup(session: requests.Session, url: str, timeout: int = 30) -> bool:
-    """Ana sayfayı ziyaret edip çerezleri alır, Referer'ı ayarlar."""
+    """Ana sayfayı ziyaret edip çerezleri alır, Referer'ı ayarlar.
+
+    Sonucu AÇIKÇA log'lar: ısınmanın kendisi de reddedildiyse engel
+    büyük ihtimalle başlık/çerez değil, IP tabanlıdır. Bunu bilmek
+    hangi çözümü deneyeceğimizi belirler.
+    """
     try:
-        session.get(url, timeout=timeout)
-        time.sleep(1.0 + random.uniform(0, 0.8))
+        resp = session.get(url, timeout=timeout)
+        cerez = len(session.cookies)
         session.headers["Referer"] = url
-        log.debug("ısınma isteği tamam: %s (%d çerez)", url, len(session.cookies))
-        return True
+        time.sleep(1.0 + random.uniform(0, 0.8))
+
+        if resp.status_code == 200:
+            log.info("ısınma OK: %s → HTTP 200, %d çerez alındı", url, cerez)
+            return True
+        log.warning("ısınma REDDEDİLDİ: %s → HTTP %s, %d çerez. Ana sayfa bile "
+                    "açılmıyorsa engel başlık/çerez kaynaklı DEĞİL, bu sunucunun "
+                    "IP'si engelleniyor demektir.", url, resp.status_code, cerez)
+        return False
     except Exception as exc:  # noqa: BLE001
         log.warning("ısınma isteği başarısız (%s), yine de devam ediliyor", exc)
         return False
@@ -112,7 +124,8 @@ def fetch(url: str, *, render: bool = False, timeout: int = 30,
     session verilirse o oturum kullanılır (çerezler korunur).
     """
     if render:
-        return _fetch_rendered(url, timeout=timeout, wait_selector=wait_selector)
+        return _fetch_rendered(url, timeout=timeout, wait_selector=wait_selector,
+                               warmup_url=warmup_url, user_agent=user_agent)
     return _fetch_plain(url, timeout=timeout, headers=headers, retries=retries,
                         warmup_url=warmup_url, session=session,
                         user_agent=user_agent)
@@ -191,27 +204,72 @@ def _fetch_plain(url: str, *, timeout: int, headers: dict | None, retries: int,
     raise FetchError(f"{url} indirilemedi: {last_error}")
 
 
-def _fetch_rendered(url: str, *, timeout: int, wait_selector: str | None) -> str:
+def _fetch_rendered(url: str, *, timeout: int, wait_selector: str | None,
+                    warmup_url: str | None = None,
+                    user_agent: str | None = None) -> str:
+    """Gerçek Chromium ile açar.
+
+    warmup_url verilirse önce o sayfaya gidilir (aynı tarayıcı bağlamında,
+    yani çerezler korunur), sonra asıl adrese geçilir — tıpkı siteye girip
+    arama yapan bir kullanıcı gibi.
+    """
     try:
         from playwright.sync_api import sync_playwright
+        from playwright.sync_api import Error as PwError
+        from playwright.sync_api import TimeoutError as PwTimeout
     except ImportError as exc:  # pragma: no cover
         raise FetchError(
             "Bu kaynak render:true istiyor ama playwright kurulu değil. "
             "`pip install playwright && playwright install chromium` çalıştır."
         ) from exc
 
+    ua = user_agent or DEFAULT_USER_AGENT
     with sync_playwright() as p:
         browser = p.chromium.launch(args=["--no-sandbox"])
         try:
-            page = browser.new_page(
-                user_agent=DEFAULT_HEADERS["User-Agent"],
+            # Headless Chromium kendini varsayılan olarak "HeadlessChrome"
+            # diye tanıtır; UA'yı HTTP yolundakiyle aynı tutuyoruz ki iki
+            # yol arasında tutarsızlık olmasın.
+            context = browser.new_context(
+                user_agent=ua,
                 locale="tr-TR",
+                viewport={"width": 1366, "height": 900},
+                extra_http_headers={"Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"},
             )
-            page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
+            page = context.new_page()
+
+            if warmup_url:
+                try:
+                    r = page.goto(warmup_url, timeout=timeout * 1000,
+                                  wait_until="domcontentloaded")
+                    kod = r.status if r else "?"
+                    log.info("ısınma (tarayıcı): %s → HTTP %s", warmup_url, kod)
+                    page.wait_for_timeout(1500)
+                except (PwError, PwTimeout) as exc:
+                    log.warning("tarayıcı ısınması başarısız: %s", exc)
+
+            resp = page.goto(url, timeout=timeout * 1000,
+                             wait_until="domcontentloaded")
+            durum = resp.status if resp else None
+            if durum and durum in PERMANENT_STATUSES:
+                raise PermanentFetchError(
+                    f"HTTP {durum} — gerçek tarayıcıyla da reddedildi. "
+                    "Bu, engelin başlık/tarayıcı kaynaklı DEĞİL, bu sunucunun "
+                    "IP'sine dayalı olduğunu gösterir. Tek çözüm taramayı "
+                    "kendi ağında çalıştırmak."
+                )
+
             if wait_selector:
-                page.wait_for_selector(wait_selector, timeout=timeout * 1000)
+                try:
+                    page.wait_for_selector(wait_selector, timeout=timeout * 1000)
+                except PwTimeout:
+                    log.warning("'%s' beklenirken zaman aşımı — sayfa yine de "
+                                "okunuyor", wait_selector)
             else:
-                page.wait_for_load_state("networkidle", timeout=timeout * 1000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=timeout * 1000)
+                except PwTimeout:
+                    pass
             return page.content()
         finally:
             browser.close()
